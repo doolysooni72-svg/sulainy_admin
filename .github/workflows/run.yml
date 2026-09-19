@@ -1,0 +1,23 @@
+name: Build APK
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate project files
+        run: python3 -c "import yaml;s=yaml.safe_load(open('build.yml'));open('gen.sh','w').write([x for x in s['jobs']['build']['steps'] if x.get('name')=='Write project files'][0]['run'])" && bash gen.sh
+      - run: flutter create --org com.saliny --project-name saliny_admin .
+      - name: Android permissions and minSdk
+        run: |
+          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/' android/app/build.gradle* || true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saliny-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
