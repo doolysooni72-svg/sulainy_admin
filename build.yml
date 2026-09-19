@@ -1,0 +1,4206 @@
+name: Build APK
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Write project files
+        run: |
+          cat > pubspec.yaml << 'SALINY_EOF_MARKER_7f3a'
+          name: saliny_admin
+          description: لوحة تحكم مكتبة السليني - نظام المبيعات
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.3.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            flutter_localizations:
+              sdk: flutter
+            cupertino_icons: ^1.0.8
+            supabase_flutter: ^2.8.0
+            provider: ^6.1.2
+            mobile_scanner: ^6.0.2
+            image_picker: ^1.1.2
+            flutter_image_compress: ^2.3.0
+            path_provider: ^2.1.4
+            intl: ^0.19.0
+            url_launcher: ^6.3.1
+            cached_network_image: ^3.4.1
+            google_fonts: ^6.2.1
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^4.0.0
+
+          flutter:
+            uses-material-design: true
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/core
+          cat > lib/core/constants.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:intl/intl.dart';
+
+          class Config {
+            static const supabaseUrl = 'https://niehsvflklneawijoksh.supabase.co';
+            static const supabaseKey = 'sb_publishable_k_t9MBQo-w8-P1ix5uW_6w_55K7lxAa';
+
+            // Storage buckets (نفس الموجودة في النسخة الويب)
+            static const bucketProducts = 'product-images';
+            static const bucketAnnouncements = 'announcement-images';
+            static const bucketPaymentQr = 'payment-qr';
+            static const bucketTransfers = 'transfer-notifications';
+
+            /// حد المخزون المنخفض
+            static const lowStockThreshold = 3;
+          }
+
+          /// معرّفات التبويبات (نفس data-tab في النسخة الويب)
+          enum AppTab {
+            dash('الرئيسية'),
+            prod('المنتجات'),
+            ord('الطلبات'),
+            special('طلبات خاصة'),
+            cs('خدمة العملاء'),
+            announce('الإعلانات'),
+            pay('طرق الدفع'),
+            pos('بيع النافذة'),
+            kiosk('بيع الكشك'),
+            reports('تقارير المبيعات'),
+            settings('الإعدادات');
+
+            final String label;
+            const AppTab(this.label);
+          }
+
+          /// الصلاحيات: نفس roleTabs في النسخة الويب بالظبط
+          const Map<String, List<AppTab>> roleTabs = {
+            'admin': [
+              AppTab.dash,
+              AppTab.prod,
+              AppTab.ord,
+              AppTab.special,
+              AppTab.cs,
+              AppTab.announce,
+              AppTab.pay,
+              AppTab.pos,
+              AppTab.kiosk,
+              AppTab.reports,
+              AppTab.settings,
+            ],
+            'orders': [AppTab.ord, AppTab.special],
+            'support': [AppTab.announce],
+            'pos': [AppTab.pos],
+            'pos_kiosk': [AppTab.kiosk],
+            'customer_service': [AppTab.cs],
+          };
+
+          // ---------- تنسيقات ----------
+          final _numFmt = NumberFormat.decimalPattern('ar_EG');
+          final _dateFmt = DateFormat('d/M/yyyy hh:mm a', 'ar_EG');
+
+          String money(num? n) => '${_numFmt.format(n ?? 0)} جنيه';
+
+          String fmtDate(DateTime? d) => d == null ? '-' : _dateFmt.format(d.toLocal());
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/core
+          cat > lib/core/theme.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:google_fonts/google_fonts.dart';
+
+          /// نفس ألوان لوحة التحكم الأصلية (كحلي + فضي + أزرق)
+          class AppColors {
+            static const bgNavy = Color(0xFF050C18);
+            static const panelNavy = Color(0xFF0C1626);
+            static const panelNavy2 = Color(0xFF111F35);
+            static const inputBg = Color(0xFF081120);
+            static const borderSilver = Color(0xFF3D4C60);
+            static const divider = Color(0xFF1A2740);
+            static const accentBlue = Color(0xFF4A90D9);
+
+            static const textMain = Color(0xFFE4E9EF);
+            static const textSoft = Color(0xFFD0D8E2);
+            static const textLabel = Color(0xFF9DB3CC);
+            static const textTitle = Color(0xFFCFE0F5);
+            static const textMuted = Color(0xFF7D8BA0);
+            static const textDim = Color(0xFF5C6B80);
+            static const priceBlue = Color(0xFF9DC4F0);
+
+            static const success = Color(0xFF7FD8A8);
+            static const successBg = Color(0xFF1F4A34);
+            static const danger = Color(0xFFE8899A);
+            static const dangerBg = Color(0xFF4A2130);
+            static const warning = Color(0xFFE0C060);
+            static const offer = Color(0xFFE0839A);
+            static const editBg = Color(0xFF1E3A5F);
+
+            static const silverGradient = LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                Color(0xFF9AA5B1),
+                Color(0xFFE8EDF2),
+                Color(0xFFC3CDD8),
+                Color(0xFFF4F7FA),
+                Color(0xFF8B96A3),
+              ],
+            );
+          }
+
+          ThemeData buildAppTheme() {
+            final base = ThemeData.dark(useMaterial3: true);
+            final textTheme = GoogleFonts.cairoTextTheme(base.textTheme).apply(
+              bodyColor: AppColors.textMain,
+              displayColor: AppColors.textMain,
+            );
+
+            OutlineInputBorder border(Color c) => OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: c),
+                );
+
+            return base.copyWith(
+              scaffoldBackgroundColor: AppColors.bgNavy,
+              colorScheme: const ColorScheme.dark(
+                primary: AppColors.accentBlue,
+                secondary: AppColors.accentBlue,
+                surface: AppColors.panelNavy,
+                error: AppColors.danger,
+              ),
+              textTheme: textTheme,
+              appBarTheme: const AppBarTheme(
+                backgroundColor: AppColors.bgNavy,
+                elevation: 0,
+                centerTitle: false,
+              ),
+              inputDecorationTheme: InputDecorationTheme(
+                filled: true,
+                fillColor: AppColors.inputBg,
+                contentPadding: const EdgeInsets.all(12),
+                labelStyle: const TextStyle(color: AppColors.textLabel),
+                hintStyle: const TextStyle(color: AppColors.textDim),
+                border: border(AppColors.borderSilver),
+                enabledBorder: border(AppColors.borderSilver),
+                focusedBorder: border(AppColors.accentBlue),
+              ),
+              checkboxTheme: CheckboxThemeData(
+                fillColor: WidgetStateProperty.resolveWith(
+                  (s) => s.contains(WidgetState.selected)
+                      ? AppColors.accentBlue
+                      : Colors.transparent,
+                ),
+                side: const BorderSide(color: AppColors.borderSilver, width: 1.5),
+              ),
+              snackBarTheme: SnackBarThemeData(
+                backgroundColor: AppColors.panelNavy2,
+                contentTextStyle: GoogleFonts.cairo(color: AppColors.textMain),
+                behavior: SnackBarBehavior.floating,
+              ),
+              // لون خلفية الحوارات (بدل DialogTheme لأن اسمه اتغير بين إصدارات Flutter)
+              dialogBackgroundColor: AppColors.panelNavy,
+            );
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib
+          cat > lib/main.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:flutter_localizations/flutter_localizations.dart';
+          import 'package:intl/date_symbol_data_local.dart';
+          import 'package:provider/provider.dart';
+          import 'package:supabase_flutter/supabase_flutter.dart';
+
+          import 'core/constants.dart';
+          import 'core/theme.dart';
+          import 'providers/app_state.dart';
+          import 'screens/home_shell.dart';
+          import 'screens/login_screen.dart';
+
+          Future<void> main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+            await initializeDateFormatting('ar_EG');
+
+            await Supabase.initialize(
+              url: Config.supabaseUrl,
+              anonKey: Config.supabaseKey,
+            );
+
+            runApp(
+              ChangeNotifierProvider(
+                create: (_) => AppState(),
+                child: const SalinyApp(),
+              ),
+            );
+          }
+
+          class SalinyApp extends StatelessWidget {
+            const SalinyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'لوحة التحكم - مكتبة السليني',
+                debugShowCheckedModeBanner: false,
+                theme: buildAppTheme(),
+                // RTL عربي كامل
+                locale: const Locale('ar', 'EG'),
+                supportedLocales: const [Locale('ar', 'EG')],
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                home: Consumer<AppState>(
+                  builder: (_, s, __) =>
+                      s.isLoggedIn ? const HomeShell() : const LoginScreen(),
+                ),
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/models
+          cat > lib/models/models.dart << 'SALINY_EOF_MARKER_7f3a'
+          DateTime? _parseDate(dynamic v) =>
+              v == null ? null : DateTime.tryParse(v.toString());
+
+          double _num(dynamic v) => v == null ? 0 : (v as num).toDouble();
+
+          class Product {
+            final String id;
+            final String title;
+            final String description;
+            final double price;
+            final int stock;
+            final String? imageUrl;
+            final bool isOffer;
+            final double? originalPrice;
+            final String barcode;
+
+            Product({
+              required this.id,
+              required this.title,
+              required this.description,
+              required this.price,
+              required this.stock,
+              this.imageUrl,
+              this.isOffer = false,
+              this.originalPrice,
+              this.barcode = '',
+            });
+
+            factory Product.fromJson(Map<String, dynamic> j) => Product(
+                  id: j['id'].toString(),
+                  title: j['title'] ?? '',
+                  description: j['description'] ?? '',
+                  price: _num(j['price']),
+                  stock: (j['stock'] as num?)?.toInt() ?? 0,
+                  imageUrl: j['image_url'],
+                  isOffer: j['is_offer'] == true,
+                  originalPrice:
+                      j['original_price'] == null ? null : _num(j['original_price']),
+                  barcode: j['barcode'] ?? '',
+                );
+          }
+
+          /// سطر داخل طلب / فاتورة (الحقول: title, price, qty)
+          class LineItem {
+            final String title;
+            final double price;
+            final int qty;
+
+            LineItem({required this.title, required this.price, required this.qty});
+
+            factory LineItem.fromJson(Map<String, dynamic> j) => LineItem(
+                  title: j['title'] ?? '',
+                  price: _num(j['price']),
+                  qty: (j['qty'] as num?)?.toInt() ?? 0,
+                );
+
+            Map<String, dynamic> toJson() => {'title': title, 'price': price, 'qty': qty};
+          }
+
+          List<LineItem> _items(dynamic v) => (v as List? ?? [])
+              .map((e) => LineItem.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+
+          class Order {
+            final String id;
+            final String name;
+            final String phone;
+            final String deliveryAddress;
+            final String gpsLink;
+            final List<LineItem> items;
+            final double total;
+            final String status;
+            final DateTime? createdAt;
+            final String receiptUrl;
+
+            Order({
+              required this.id,
+              required this.name,
+              required this.phone,
+              required this.deliveryAddress,
+              required this.gpsLink,
+              required this.items,
+              required this.total,
+              required this.status,
+              required this.createdAt,
+              required this.receiptUrl,
+            });
+
+            bool get isDone => status == 'done';
+
+            String get itemsText => items.map((i) => '${i.title} ×${i.qty}').join('، ');
+
+            factory Order.fromJson(Map<String, dynamic> j) => Order(
+                  id: j['id'].toString(),
+                  name: j['name'] ?? '',
+                  phone: j['phone'] ?? '',
+                  deliveryAddress: j['delivery_address'] ?? '',
+                  gpsLink: j['gps_link'] ?? '',
+                  items: _items(j['items']),
+                  total: _num(j['total']),
+                  status: j['status'] ?? 'pending',
+                  createdAt: _parseDate(j['created_at']),
+                  receiptUrl: j['payment_screenshot_url'] ?? '',
+                );
+          }
+
+          class PosSale {
+            final String id;
+            final List<LineItem> items;
+            final double total;
+            final String location; // main | kiosk
+            final DateTime? createdAt;
+
+            PosSale({
+              required this.id,
+              required this.items,
+              required this.total,
+              required this.location,
+              required this.createdAt,
+            });
+
+            bool get isKiosk => location == 'kiosk';
+
+            factory PosSale.fromJson(Map<String, dynamic> j) => PosSale(
+                  id: j['id'].toString(),
+                  items: _items(j['items']),
+                  total: _num(j['total']),
+                  location: j['location'] ?? 'main',
+                  createdAt: _parseDate(j['created_at']),
+                );
+          }
+
+          class SpecialOrder {
+            final String id;
+            final String name;
+            final String phone;
+            final String description;
+            final String status;
+            final DateTime? createdAt;
+
+            SpecialOrder({
+              required this.id,
+              required this.name,
+              required this.phone,
+              required this.description,
+              required this.status,
+              required this.createdAt,
+            });
+
+            bool get isDone => status == 'done';
+
+            factory SpecialOrder.fromJson(Map<String, dynamic> j) => SpecialOrder(
+                  id: j['id'].toString(),
+                  name: j['name'] ?? '',
+                  phone: j['phone'] ?? '',
+                  description: j['description'] ?? '',
+                  status: j['status'] ?? 'pending',
+                  createdAt: _parseDate(j['created_at']),
+                );
+          }
+
+          class Announcement {
+            final String id;
+            final String text;
+            final String? imageUrl;
+
+            Announcement({required this.id, required this.text, this.imageUrl});
+
+            factory Announcement.fromJson(Map<String, dynamic> j) => Announcement(
+                  id: j['id'].toString(),
+                  text: j['text'] ?? '',
+                  imageUrl: j['image_url'],
+                );
+          }
+
+          class PaymentMethod {
+            final String id;
+            final String name;
+            final String? accountNumber;
+            final String? qrUrl;
+
+            PaymentMethod({
+              required this.id,
+              required this.name,
+              this.accountNumber,
+              this.qrUrl,
+            });
+
+            factory PaymentMethod.fromJson(Map<String, dynamic> j) => PaymentMethod(
+                  id: j['id'].toString(),
+                  name: j['name'] ?? '',
+                  accountNumber: j['account_number'],
+                  qrUrl: j['qr_image_url'],
+                );
+          }
+
+          class ShopSettings {
+            final String shopName;
+            final String whatsapp;
+            final String facebook;
+            final String customerServiceNumber;
+            final String location;
+            final String termsText;
+            final DateTime? statsResetAt;
+
+            ShopSettings({
+              this.shopName = '',
+              this.whatsapp = '',
+              this.facebook = '',
+              this.customerServiceNumber = '',
+              this.location = '',
+              this.termsText = '',
+              this.statsResetAt,
+            });
+
+            factory ShopSettings.fromJson(Map<String, dynamic> j) => ShopSettings(
+                  shopName: j['shop_name'] ?? '',
+                  whatsapp: j['whatsapp'] ?? '',
+                  facebook: j['facebook'] ?? '',
+                  customerServiceNumber: j['customer_service_number'] ?? '',
+                  location: j['location'] ?? '',
+                  termsText: j['terms_text'] ?? '',
+                  statsResetAt: _parseDate(j['stats_reset_at']),
+                );
+          }
+
+          /// عنصر في سلة بيع النافذة / الكشك
+          class CartItem {
+            final String productId;
+            final String title;
+            final double price;
+            final int maxStock;
+            int qty;
+
+            CartItem({
+              required this.productId,
+              required this.title,
+              required this.price,
+              required this.maxStock,
+              this.qty = 1,
+            });
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/providers
+          cat > lib/providers/app_state.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/foundation.dart';
+
+          import '../core/constants.dart';
+          import '../models/models.dart';
+          import '../services/api.dart';
+
+          /// إحصائيات الداشبورد (محسوبة بعد التصفير)
+          class DashStats {
+            final int totalOrders;
+            final double totalRevenue;
+            final int mainSalesCount;
+            final int kioskSalesCount;
+            final int pendingCount;
+            final int productsCount;
+            final List<Product> lowStock;
+            final List<RecentRow> recent;
+
+            DashStats({
+              required this.totalOrders,
+              required this.totalRevenue,
+              required this.mainSalesCount,
+              required this.kioskSalesCount,
+              required this.pendingCount,
+              required this.productsCount,
+              required this.lowStock,
+              required this.recent,
+            });
+          }
+
+          class RecentRow {
+            final String source;
+            final String name;
+            final double total;
+            final bool done;
+            final DateTime? createdAt;
+            RecentRow(this.source, this.name, this.total, this.done, this.createdAt);
+          }
+
+          class AppState extends ChangeNotifier {
+            final Api api = Api();
+
+            // --- المصادقة ---
+            String? userId;
+            String? userEmail;
+            String? role;
+            String? fatalError;
+            bool loggingIn = false;
+
+            bool get isLoggedIn => userId != null;
+
+            List<AppTab> get allowedTabs => roleTabs[role] ?? const [];
+
+            // --- البيانات ---
+            List<Product> products = [];
+            List<Order> orders = [];
+            List<PosSale> posSales = [];
+            List<SpecialOrder> specialOrders = [];
+            List<Announcement> announcements = [];
+            List<PaymentMethod> paymentMethods = [];
+            ShopSettings settings = ShopSettings();
+
+            // ================= المصادقة =================
+            /// يرجّع رسالة الخطأ أو null عند النجاح
+            Future<String?> login(String email, String password) async {
+              loggingIn = true;
+              notifyListeners();
+              try {
+                final res = await api.signIn(email, password);
+                final user = res.user;
+                if (user == null) return 'فشل تسجيل الدخول';
+                userId = user.id;
+                userEmail = user.email;
+
+                final r = await api.fetchMyRole(user.id);
+                if (r == null) {
+                  fatalError =
+                      'لم يتم العثور على صلاحياتك في جدول staff_roles. تأكد من ربط حسابك بدور.';
+                  await api.signOut();
+                  userId = null;
+                  return fatalError;
+                }
+                role = r;
+                fatalError = null;
+                // أول تحميل للبيانات (لا ننتظره حتى تظهر الشاشة بسرعة)
+                loadAllForRole();
+                return null;
+              } catch (e) {
+                return 'فشل تسجيل الدخول: ${_clean(e)}';
+              } finally {
+                loggingIn = false;
+                notifyListeners();
+              }
+            }
+
+            Future<void> logout() async {
+              try {
+                await api.signOut();
+              } catch (_) {}
+              userId = null;
+              userEmail = null;
+              role = null;
+              products = [];
+              orders = [];
+              posSales = [];
+              specialOrders = [];
+              announcements = [];
+              paymentMethods = [];
+              settings = ShopSettings();
+              notifyListeners();
+            }
+
+            String _clean(Object e) => e.toString().replaceFirst('Exception: ', '');
+
+            void _setError(String prefix, Object e) {
+              fatalError = '$prefix: ${_clean(e)}';
+              notifyListeners();
+            }
+
+            void clearError() {
+              fatalError = null;
+              notifyListeners();
+            }
+
+            // ================= تحميل البيانات حسب الدور =================
+            Future<void> loadAllForRole() async {
+              switch (role) {
+                case 'admin':
+                  await Future.wait([
+                    loadProducts(),
+                    loadOrders(),
+                    loadPosSales(),
+                    loadSpecialOrders(),
+                    loadAnnouncements(),
+                    loadPaymentMethods(),
+                    loadSettings(),
+                  ]);
+                  break;
+                case 'orders':
+                  await Future.wait([loadOrders(), loadSpecialOrders()]);
+                  break;
+                case 'support':
+                  await loadAnnouncements();
+                  break;
+                case 'pos':
+                case 'pos_kiosk':
+                  await loadProducts();
+                  break;
+                case 'customer_service':
+                  // خدمة العملاء بتقرأ الطلبات والطلبات الخاصة (عرض فقط)
+                  await Future.wait([loadOrders(), loadSpecialOrders()]);
+                  break;
+              }
+            }
+
+            Future<void> loadProducts() async {
+              try {
+                products = await api.fetchProducts();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل المنتجات', e);
+              }
+            }
+
+            Future<void> loadOrders() async {
+              try {
+                orders = await api.fetchOrders();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل الطلبات', e);
+              }
+            }
+
+            Future<void> loadPosSales() async {
+              try {
+                posSales = await api.fetchPosSales();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل مبيعات النافذة', e);
+              }
+            }
+
+            Future<void> loadSpecialOrders() async {
+              try {
+                specialOrders = await api.fetchSpecialOrders();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل الطلبات الخاصة', e);
+              }
+            }
+
+            Future<void> loadAnnouncements() async {
+              try {
+                announcements = await api.fetchAnnouncements();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل الإعلانات', e);
+              }
+            }
+
+            Future<void> loadPaymentMethods() async {
+              try {
+                paymentMethods = await api.fetchPaymentMethods();
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل طرق الدفع', e);
+              }
+            }
+
+            Future<void> loadSettings() async {
+              try {
+                final s = await api.fetchSettings();
+                if (s != null) settings = s;
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر تحميل الإعدادات', e);
+              }
+            }
+
+            // ================= إجراءات =================
+            Future<void> markOrderDone(String id) async {
+              try {
+                await api.markOrderDone(id);
+                await loadOrders();
+              } catch (e) {
+                _setError('تعذر تحديث الطلب', e);
+              }
+            }
+
+            Future<void> deleteOrder(String id) async {
+              try {
+                await api.deleteOrder(id);
+                await loadOrders();
+              } catch (e) {
+                _setError('تعذر حذف الطلب', e);
+              }
+            }
+
+            Future<void> markSpecialDone(String id) async {
+              try {
+                await api.markSpecialDone(id);
+                await loadSpecialOrders();
+              } catch (e) {
+                _setError('خطأ', e);
+              }
+            }
+
+            Future<void> deleteSpecial(String id) async {
+              try {
+                await api.deleteSpecial(id);
+                await loadSpecialOrders();
+              } catch (e) {
+                _setError('خطأ', e);
+              }
+            }
+
+            Future<void> deleteProduct(String id) async {
+              try {
+                await api.deleteProduct(id);
+                await loadProducts();
+              } catch (e) {
+                _setError('تعذر حذف المنتج', e);
+              }
+            }
+
+            Future<void> deleteAnnouncement(String id) async {
+              try {
+                await api.deleteAnnouncement(id);
+                await loadAnnouncements();
+              } catch (e) {
+                _setError('خطأ', e);
+              }
+            }
+
+            Future<void> deletePaymentMethod(String id) async {
+              try {
+                await api.deletePaymentMethod(id);
+                await loadPaymentMethods();
+              } catch (e) {
+                _setError('خطأ', e);
+              }
+            }
+
+            // ---- تصفير الإحصائيات ----
+            Future<void> resetStats() async {
+              try {
+                final now = DateTime.now();
+                await api.setStatsResetAt(now);
+                settings = ShopSettings(
+                  shopName: settings.shopName,
+                  whatsapp: settings.whatsapp,
+                  facebook: settings.facebook,
+                  customerServiceNumber: settings.customerServiceNumber,
+                  location: settings.location,
+                  termsText: settings.termsText,
+                  statsResetAt: now,
+                );
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر التصفير', e);
+              }
+            }
+
+            Future<void> undoStatsReset() async {
+              try {
+                await api.setStatsResetAt(null);
+                settings = ShopSettings(
+                  shopName: settings.shopName,
+                  whatsapp: settings.whatsapp,
+                  facebook: settings.facebook,
+                  customerServiceNumber: settings.customerServiceNumber,
+                  location: settings.location,
+                  termsText: settings.termsText,
+                  statsResetAt: null,
+                );
+                notifyListeners();
+              } catch (e) {
+                _setError('تعذر التراجع', e);
+              }
+            }
+
+            // ================= الداشبورد =================
+            DashStats computeDashboard() {
+              final cutoff = settings.statsResetAt;
+              bool after(DateTime? d) =>
+                  cutoff == null || (d != null && d.isAfter(cutoff));
+
+              final doneOrders = orders.where((o) => o.isDone && after(o.createdAt));
+              final mainSales =
+                  posSales.where((p) => !p.isKiosk && after(p.createdAt)).toList();
+              final kioskSales =
+                  posSales.where((p) => p.isKiosk && after(p.createdAt)).toList();
+
+              final onlineRev = doneOrders.fold<double>(0, (s, o) => s + o.total);
+              final mainRev = mainSales.fold<double>(0, (s, p) => s + p.total);
+              final kioskRev = kioskSales.fold<double>(0, (s, p) => s + p.total);
+
+              final low = products
+                  .where((p) => p.stock > 0 && p.stock <= Config.lowStockThreshold)
+                  .toList()
+                ..sort((a, b) => a.stock.compareTo(b.stock));
+
+              final combined = <RecentRow>[
+                ...orders
+                    .where((o) => after(o.createdAt))
+                    .map((o) => RecentRow('أونلاين', o.name, o.total, o.isDone, o.createdAt)),
+                ...mainSales
+                    .map((s) => RecentRow('بيع النافذة', 'بيع نافذة', s.total, true, s.createdAt)),
+                ...kioskSales
+                    .map((s) => RecentRow('الكشك', 'بيع كشك', s.total, true, s.createdAt)),
+              ]..sort((a, b) => (b.createdAt ?? DateTime(0))
+                  .compareTo(a.createdAt ?? DateTime(0)));
+
+              return DashStats(
+                totalOrders: orders.length,
+                totalRevenue: onlineRev + mainRev + kioskRev,
+                mainSalesCount: mainSales.length,
+                kioskSalesCount: kioskSales.length,
+                pendingCount: orders.where((o) => o.status == 'pending').length,
+                productsCount: products.length,
+                lowStock: low,
+                recent: combined.take(8).toList(),
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens
+          cat > lib/screens/home_shell.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../core/constants.dart';
+          import '../core/theme.dart';
+          import '../providers/app_state.dart';
+          import '../widgets/common.dart';
+          import 'tabs/announcements_tab.dart';
+          import 'tabs/cs_tab.dart';
+          import 'tabs/dashboard_tab.dart';
+          import 'tabs/orders_tab.dart';
+          import 'tabs/payment_tab.dart';
+          import 'tabs/pos_tab.dart';
+          import 'tabs/products_tab.dart';
+          import 'tabs/reports_tab.dart';
+          import 'tabs/settings_tab.dart';
+          import 'tabs/special_orders_tab.dart';
+
+          class HomeShell extends StatefulWidget {
+            const HomeShell({super.key});
+
+            @override
+            State<HomeShell> createState() => _HomeShellState();
+          }
+
+          class _HomeShellState extends State<HomeShell> {
+            AppTab? _current;
+            bool _refreshing = false;
+
+            /// يسمح للتبويبات بالتنقل لتبويب آخر (مثلاً "تعديل" يفتح المنتجات)
+            void goTo(AppTab tab) => setState(() => _current = tab);
+
+            Widget _buildTab(AppTab tab) {
+              switch (tab) {
+                case AppTab.dash:
+                  return const DashboardTab();
+                case AppTab.prod:
+                  return const ProductsTab();
+                case AppTab.ord:
+                  return const OrdersTab();
+                case AppTab.special:
+                  return const SpecialOrdersTab();
+                case AppTab.cs:
+                  return const CsTab();
+                case AppTab.announce:
+                  return const AnnouncementsTab();
+                case AppTab.pay:
+                  return const PaymentTab();
+                case AppTab.pos:
+                  return const PosTab(kiosk: false);
+                case AppTab.kiosk:
+                  return const PosTab(kiosk: true);
+                case AppTab.reports:
+                  return const ReportsTab();
+                case AppTab.settings:
+                  return const SettingsTab();
+              }
+            }
+
+            Future<void> _refresh() async {
+              setState(() => _refreshing = true);
+              await context.read<AppState>().loadAllForRole();
+              if (mounted) setState(() => _refreshing = false);
+            }
+
+            Future<void> _logout() async {
+              final ok = await confirmDialog(context, 'هل تريد تسجيل الخروج؟');
+              if (ok && mounted) context.read<AppState>().logout();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final s = context.watch<AppState>();
+              final tabs = s.allowedTabs;
+
+              if (tabs.isEmpty) {
+                return Scaffold(
+                  body: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('لا توجد صلاحيات لهذا الحساب'),
+                        const SizedBox(height: 12),
+                        OutlineBtn(
+                            label: 'خروج', fullWidth: false, onPressed: s.logout),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              // لو التبويب الحالي مش مسموح أو لسه ما اتحددش → أول تبويب مسموح
+              final current = (_current != null && tabs.contains(_current))
+                  ? _current!
+                  : tabs.first;
+              final showNav = tabs.length > 1;
+
+              return Scaffold(
+                body: GlowBackground(
+                  child: SafeArea(
+                    child: Column(
+                      children: [
+                        // ---- بانر الأخطاء ----
+                        if (s.fatalError != null)
+                          Material(
+                            color: const Color(0xFF7A1010),
+                            child: InkWell(
+                              onTap: s.clearError,
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(s.fatalError!,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              color: Colors.white, fontSize: 13)),
+                                    ),
+                                    const Icon(Icons.close, size: 16, color: Colors.white70),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // ---- الشريط العلوي ----
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                                bottom: BorderSide(color: AppColors.borderSilver)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SilverText('لوحة التحكم — نظام المبيعات',
+                                        size: 17),
+                                    const SizedBox(height: 2),
+                                    Text(s.userEmail ?? '',
+                                        style: const TextStyle(
+                                            color: AppColors.textDim, fontSize: 12)),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'تحديث',
+                                onPressed: _refreshing ? null : _refresh,
+                                icon: _refreshing
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2))
+                                    : const Icon(Icons.refresh,
+                                        color: AppColors.textLabel),
+                              ),
+                              IconButton(
+                                tooltip: 'خروج',
+                                onPressed: _logout,
+                                icon: const Icon(Icons.logout, color: AppColors.danger),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // ---- شريط التبويبات ----
+                        if (showNav)
+                          Container(
+                            height: 46,
+                            decoration: const BoxDecoration(
+                              border:
+                                  Border(bottom: BorderSide(color: AppColors.divider)),
+                            ),
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              itemCount: tabs.length,
+                              itemBuilder: (_, i) {
+                                final t = tabs[i];
+                                final active = t == current;
+                                return InkWell(
+                                  onTap: () => goTo(t),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      border: Border(
+                                        bottom: BorderSide(
+                                          color: active
+                                              ? AppColors.accentBlue
+                                              : Colors.transparent,
+                                          width: 2,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      t.label,
+                                      style: TextStyle(
+                                        color: active
+                                            ? AppColors.accentBlue
+                                            : AppColors.textDim,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+
+                        // ---- المحتوى ----
+                        Expanded(
+                          child: RefreshIndicator(
+                            onRefresh: () => context.read<AppState>().loadAllForRole(),
+                            color: AppColors.accentBlue,
+                            backgroundColor: AppColors.panelNavy,
+                            child: _KeepAlive(
+                              key: ValueKey(current),
+                              child: _buildTab(current),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+
+          class _KeepAlive extends StatelessWidget {
+            final Widget child;
+            const _KeepAlive({super.key, required this.child});
+            @override
+            Widget build(BuildContext context) => child;
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens
+          cat > lib/screens/login_screen.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../providers/app_state.dart';
+          import '../widgets/common.dart';
+
+          class LoginScreen extends StatefulWidget {
+            const LoginScreen({super.key});
+
+            @override
+            State<LoginScreen> createState() => _LoginScreenState();
+          }
+
+          class _LoginScreenState extends State<LoginScreen> {
+            final _email = TextEditingController();
+            final _pass = TextEditingController();
+            String? _error;
+
+            @override
+            void dispose() {
+              _email.dispose();
+              _pass.dispose();
+              super.dispose();
+            }
+
+            Future<void> _login() async {
+              final email = _email.text.trim();
+              final pass = _pass.text;
+              if (email.isEmpty || pass.isEmpty) {
+                setState(() => _error = 'الرجاء إدخال البريد وكلمة المرور');
+                return;
+              }
+              setState(() => _error = null);
+              final err = await context.read<AppState>().login(email, pass);
+              if (!mounted) return;
+              if (err != null) setState(() => _error = err);
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final loading = context.watch<AppState>().loggingIn;
+
+              return Scaffold(
+                body: GlowBackground(
+                  child: SafeArea(
+                    child: Center(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 400),
+                          child: Panel(
+                            padding: const EdgeInsets.all(28),
+                            margin: EdgeInsets.zero,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SilverText('مكتبة السليني', size: 28),
+                                const SizedBox(height: 6),
+                                const Text('لوحة التحكم',
+                                    style: TextStyle(
+                                        color: Color(0xFF7D8BA0),
+                                        fontSize: 13,
+                                        letterSpacing: 3)),
+                                const SizedBox(height: 28),
+                                LabeledField(
+                                  label: 'البريد الإلكتروني',
+                                  controller: _email,
+                                  keyboard: TextInputType.emailAddress,
+                                ),
+                                LabeledField(
+                                  label: 'كلمة المرور',
+                                  controller: _pass,
+                                  obscure: true,
+                                ),
+                                SilverButton(
+                                  label: 'دخول',
+                                  loading: loading,
+                                  onPressed: _login,
+                                ),
+                                StatusMsg(_error, error: true),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/announcements_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'dart:io';
+
+          import 'package:cached_network_image/cached_network_image.dart';
+          import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          class AnnouncementsTab extends StatefulWidget {
+            const AnnouncementsTab({super.key});
+
+            @override
+            State<AnnouncementsTab> createState() => _AnnouncementsTabState();
+          }
+
+          class _AnnouncementsTabState extends State<AnnouncementsTab> {
+            final _text = TextEditingController();
+            File? _image;
+            bool _saving = false;
+            String? _msg;
+            bool _msgError = false;
+
+            @override
+            void dispose() {
+              _text.dispose();
+              super.dispose();
+            }
+
+            Future<void> _pick() async {
+              final x = await ImagePicker().pickImage(source: ImageSource.gallery);
+              if (x != null) setState(() => _image = File(x.path));
+            }
+
+            Future<void> _save() async {
+              final text = _text.text.trim();
+              if (text.isEmpty) {
+                setState(() {
+                  _msg = 'الرجاء كتابة نص الإعلان';
+                  _msgError = true;
+                });
+                return;
+              }
+              final state = context.read<AppState>();
+              setState(() {
+                _saving = true;
+                _msg = null;
+              });
+              try {
+                String? url;
+                if (_image != null) {
+                  try {
+                    url = await state.api.uploadImage(
+                        file: _image!, bucket: Config.bucketAnnouncements);
+                  } catch (e) {
+                    throw 'تعذر رفع الصورة: $e';
+                  }
+                }
+                await state.api.addAnnouncement(text, url);
+                _text.clear();
+                _image = null;
+                await state.loadAnnouncements();
+                if (mounted) {
+                  setState(() {
+                    _msg = 'تم نشر الإعلان';
+                    _msgError = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _msg = e.toString().startsWith('تعذر رفع') ? e.toString() : 'خطأ: $e';
+                    _msgError = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _saving = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final list = context.watch<AppState>().announcements;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('إضافة إعلان'),
+                        LabeledField(label: 'نص الإعلان', controller: _text, maxLines: 5),
+                        const Text('صورة (اختياري)',
+                            style: TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            if (_image != null)
+                              Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 10),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.file(_image!,
+                                      width: 48, height: 48, fit: BoxFit.cover),
+                                ),
+                              ),
+                            Expanded(
+                              child: OutlineBtn(
+                                label: _image == null ? 'اختيار صورة' : 'تغيير الصورة',
+                                icon: Icons.image_outlined,
+                                onPressed: _pick,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        SilverButton(
+                            label: 'نشر الإعلان', loading: _saving, onPressed: _save),
+                        StatusMsg(_msg, error: _msgError),
+                      ],
+                    ),
+                  ),
+                  const SectionTitle('الإعلانات الحالية'),
+                  if (list.isEmpty)
+                    const Panel(child: EmptyText('لا توجد إعلانات'))
+                  else
+                    ...list.map((a) => Panel(
+                          padding: const EdgeInsets.all(14),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (a.imageUrl != null && a.imageUrl!.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: CachedNetworkImage(
+                                      imageUrl: a.imageUrl!,
+                                      width: double.infinity,
+                                      height: 160,
+                                      fit: BoxFit.cover,
+                                      errorWidget: (_, __, ___) => const SizedBox(
+                                          height: 60,
+                                          child: Center(child: Icon(Icons.broken_image))),
+                                    ),
+                                  ),
+                                ),
+                              Text(a.text,
+                                  style: const TextStyle(
+                                      color: AppColors.textSoft, height: 1.6)),
+                              const SizedBox(height: 10),
+                              MiniButton('حذف', MiniKind.del, () async {
+                                final ok = await confirmDialog(context, 'حذف هذا الإعلان؟');
+                                if (ok && context.mounted) {
+                                  context.read<AppState>().deleteAnnouncement(a.id);
+                                }
+                              }),
+                            ],
+                          ),
+                        )),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/cs_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/theme.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+          import 'orders_tab.dart' show OrderCard;
+          import 'special_orders_tab.dart' show SpecialOrderCard;
+
+          /// خدمة العملاء: عرض فقط بدون تعديل أو حذف
+          class CsTab extends StatelessWidget {
+            const CsTab({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final s = context.watch<AppState>();
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const SectionTitle('الطلبات (عرض فقط)'),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 14),
+                    child: Text(
+                      'هذا العرض للاطلاع على تفاصيل الطلبات لمساعدة العملاء، بدون إمكانية تعديل أو حذف',
+                      style: TextStyle(color: AppColors.textDim, fontSize: 12.5, height: 1.6),
+                    ),
+                  ),
+                  if (s.orders.isEmpty)
+                    const Panel(child: EmptyText('لا توجد طلبات'))
+                  else
+                    ...s.orders.map((o) => OrderCard(order: o, readOnly: true)),
+                  const SizedBox(height: 10),
+                  const SectionTitle('الطلبات الخاصة (عرض فقط)'),
+                  if (s.specialOrders.isEmpty)
+                    const Panel(child: EmptyText('لا توجد طلبات خاصة'))
+                  else
+                    ...s.specialOrders
+                        .map((o) => SpecialOrderCard(order: o, readOnly: true)),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/dashboard_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          class DashboardTab extends StatelessWidget {
+            const DashboardTab({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final s = context.watch<AppState>();
+              final d = s.computeDashboard();
+              final resetAt = s.settings.statsResetAt;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  // ---- تصفير الإحصائيات ----
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('تصفير الإحصائيات'),
+                        Text(
+                          resetAt != null
+                              ? 'تم التصفير في: ${fmtDate(resetAt)} — الأرقام أدناه تشمل ما بعد هذا التاريخ فقط. كل الطلبات ومبيعات النافذة والكشك القديمة محفوظة بالكامل في تبويبي الطلبات وتقارير المبيعات.'
+                              : 'لم يتم التصفير من قبل — يتم احتساب كل المبيعات منذ البداية.',
+                          style: const TextStyle(
+                              color: AppColors.textDim, fontSize: 12.5, height: 1.6),
+                        ),
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (resetAt != null)
+                              OutlineBtn(
+                                label: 'إظهار كل السجل',
+                                fullWidth: false,
+                                onPressed: () async {
+                                  final ok = await confirmDialog(context,
+                                      'سيتم إلغاء التصفير وإظهار كل المبيعات منذ البداية في الداشبورد مجدداً. متابعة؟');
+                                  if (ok && context.mounted) {
+                                    context.read<AppState>().undoStatsReset();
+                                  }
+                                },
+                              ),
+                            OutlineBtn(
+                              label: 'تصفير المبيعات المكتملة',
+                              icon: Icons.restart_alt,
+                              color: AppColors.danger,
+                              fullWidth: false,
+                              onPressed: () async {
+                                final ok = await confirmDialog(context,
+                                    'سيتم تصفير "مبيعات مكتملة" و"آخر الطلبات" في الداشبورد إلى الصفر بدءاً من الآن. لن يُحذف أي طلب أو بيع فعلياً — كلها تبقى محفوظة وقابلة للعرض في تبويب الطلبات وتقارير المبيعات. متابعة؟');
+                                if (ok && context.mounted) {
+                                  context.read<AppState>().resetStats();
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ---- الإحصائيات ----
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.7,
+                    children: [
+                      StatTile('${d.totalOrders}', 'إجمالي الطلبات'),
+                      StatTile(money(d.totalRevenue),
+                          'مبيعات مكتملة (أونلاين + نافذة + كشك)'),
+                      StatTile('${d.mainSalesCount}', 'عمليات بيع النافذة'),
+                      StatTile('${d.kioskSalesCount}', 'عمليات بيع الكشك'),
+                      StatTile('${d.pendingCount}', 'طلبات قيد الانتظار'),
+                      StatTile('${d.productsCount}', 'عدد المنتجات'),
+                      StatTile('${d.lowStock.length}', 'مخزون منخفض'),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+
+                  // ---- مخزون منخفض ----
+                  if (d.lowStock.isNotEmpty)
+                    Panel(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SectionTitle('منتجات مخزونها منخفض'),
+                          ...d.lowStock.map((p) => Container(
+                                padding: const EdgeInsets.symmetric(vertical: 9),
+                                decoration: const BoxDecoration(
+                                  border: Border(
+                                      bottom: BorderSide(color: AppColors.divider)),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(child: Text(p.title)),
+                                    Pill('متبقي ${p.stock}', PillKind.pending),
+                                  ],
+                                ),
+                              )),
+                        ],
+                      ),
+                    ),
+
+                  // ---- آخر الطلبات ----
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('آخر الطلبات'),
+                        if (d.recent.isEmpty)
+                          const EmptyText('لا توجد طلبات بعد')
+                        else
+                          ...d.recent.map((r) => Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: const BoxDecoration(
+                                  border: Border(
+                                      bottom: BorderSide(color: AppColors.divider)),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(r.name,
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600)),
+                                          const SizedBox(height: 3),
+                                          Text('${r.source} • ${fmtDate(r.createdAt)}',
+                                              style: const TextStyle(
+                                                  color: AppColors.textDim,
+                                                  fontSize: 11.5)),
+                                        ],
+                                      ),
+                                    ),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(money(r.total),
+                                            style: const TextStyle(
+                                                color: AppColors.priceBlue)),
+                                        const SizedBox(height: 4),
+                                        Pill.status(r.done),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              )),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/orders_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../models/models.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          /// صف/سطر معلومة (عنوان: قيمة)
+          class InfoLine extends StatelessWidget {
+            final String label;
+            final Widget value;
+            const InfoLine(this.label, this.value, {super.key});
+
+            @override
+            Widget build(BuildContext context) => Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 70,
+                        child: Text(label,
+                            style: const TextStyle(
+                                color: AppColors.textMuted, fontSize: 12.5)),
+                      ),
+                      Expanded(child: value),
+                    ],
+                  ),
+                );
+          }
+
+          /// كارت طلب — يُستخدم في تبويب الطلبات (بإجراءات) وخدمة العملاء (عرض فقط)
+          class OrderCard extends StatelessWidget {
+            final Order order;
+            final bool readOnly;
+            const OrderCard({super.key, required this.order, this.readOnly = false});
+
+            @override
+            Widget build(BuildContext context) {
+              final o = order;
+              final state = context.read<AppState>();
+
+              return Panel(
+                padding: const EdgeInsets.all(14),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(o.name,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 15.5)),
+                        ),
+                        Pill.status(o.isDone),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    InfoLine('الهاتف',
+                        Text(o.phone, style: const TextStyle(color: AppColors.textSoft))),
+                    InfoLine(
+                      'العنوان',
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(o.deliveryAddress.isEmpty ? '-' : o.deliveryAddress,
+                              style: const TextStyle(color: AppColors.textSoft)),
+                          if (o.gpsLink.isNotEmpty)
+                            InkWell(
+                              onTap: () => openLink(context, o.gpsLink),
+                              child: const Padding(
+                                padding: EdgeInsets.only(top: 3),
+                                child: Text('فتح الخريطة',
+                                    style: TextStyle(
+                                        color: AppColors.priceBlue,
+                                        decoration: TextDecoration.underline)),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    InfoLine(
+                        'المنتجات',
+                        Text(o.itemsText.isEmpty ? '-' : o.itemsText,
+                            style: const TextStyle(color: AppColors.textSoft))),
+                    InfoLine('الإجمالي',
+                        Text(money(o.total),
+                            style: const TextStyle(
+                                color: AppColors.priceBlue, fontWeight: FontWeight.bold))),
+                    if (!readOnly)
+                      InfoLine(
+                        'الإيصال',
+                        o.receiptUrl.isEmpty
+                            ? const Text('-',
+                                style: TextStyle(color: AppColors.textSoft))
+                            : InkWell(
+                                onTap: () => openLink(context, o.receiptUrl),
+                                child: const Text('عرض الإيصال',
+                                    style: TextStyle(
+                                        color: AppColors.priceBlue,
+                                        decoration: TextDecoration.underline)),
+                              ),
+                      ),
+                    InfoLine('التاريخ',
+                        Text(fmtDate(o.createdAt),
+                            style: const TextStyle(color: AppColors.textSoft))),
+                    if (!readOnly) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if (!o.isDone) ...[
+                            MiniButton('إتمام', MiniKind.done,
+                                () => state.markOrderDone(o.id)),
+                            const SizedBox(width: 8),
+                          ],
+                          MiniButton('حذف', MiniKind.del, () async {
+                            final ok = await confirmDialog(context, 'حذف هذا الطلب؟');
+                            if (ok) state.deleteOrder(o.id);
+                          }),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }
+          }
+
+          class OrdersTab extends StatelessWidget {
+            const OrdersTab({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final orders = context.watch<AppState>().orders;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  SectionTitle('كل الطلبات (${orders.length})'),
+                  if (orders.isEmpty)
+                    const Panel(child: EmptyText('لا توجد طلبات'))
+                  else
+                    ...orders.map((o) => OrderCard(order: o)),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/payment_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'dart:io';
+
+          import 'package:cached_network_image/cached_network_image.dart';
+          import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          class PaymentTab extends StatefulWidget {
+            const PaymentTab({super.key});
+
+            @override
+            State<PaymentTab> createState() => _PaymentTabState();
+          }
+
+          class _PaymentTabState extends State<PaymentTab> {
+            final _name = TextEditingController();
+            final _account = TextEditingController();
+            File? _qr;
+            bool _saving = false;
+            String? _msg;
+            bool _msgError = false;
+
+            @override
+            void dispose() {
+              _name.dispose();
+              _account.dispose();
+              super.dispose();
+            }
+
+            Future<void> _pick() async {
+              final x = await ImagePicker().pickImage(source: ImageSource.gallery);
+              if (x != null) setState(() => _qr = File(x.path));
+            }
+
+            Future<void> _save() async {
+              final name = _name.text.trim();
+              if (name.isEmpty) {
+                setState(() {
+                  _msg = 'الرجاء كتابة اسم البنك أو المحفظة';
+                  _msgError = true;
+                });
+                return;
+              }
+              final state = context.read<AppState>();
+              setState(() {
+                _saving = true;
+                _msg = null;
+              });
+              try {
+                String? url;
+                if (_qr != null) {
+                  try {
+                    // صور QR بتتحفظ PNG بحجم 900 (نفس النسخة الويب)
+                    url = await state.api.uploadImage(
+                      file: _qr!,
+                      bucket: Config.bucketPaymentQr,
+                      maxDim: 900,
+                      quality: 100,
+                      png: true,
+                    );
+                  } catch (e) {
+                    throw 'تعذر رفع الصورة: $e';
+                  }
+                }
+                await state.api.addPaymentMethod(name, _account.text.trim(), url);
+                _name.clear();
+                _account.clear();
+                _qr = null;
+                await state.loadPaymentMethods();
+                if (mounted) {
+                  setState(() {
+                    _msg = 'تمت الإضافة بنجاح';
+                    _msgError = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _msg = e.toString().startsWith('تعذر رفع') ? e.toString() : 'خطأ: $e';
+                    _msgError = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _saving = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final list = context.watch<AppState>().paymentMethods;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('إضافة طريقة دفع'),
+                        LabeledField(label: 'اسم البنك / المحفظة', controller: _name),
+                        LabeledField(
+                            label: 'رقم الحساب (اختياري)', controller: _account),
+                        const Text('صورة QR (اختياري)',
+                            style: TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            if (_qr != null)
+                              Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 10),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.file(_qr!,
+                                      width: 48, height: 48, fit: BoxFit.cover),
+                                ),
+                              ),
+                            Expanded(
+                              child: OutlineBtn(
+                                label: _qr == null ? 'اختيار صورة' : 'تغيير الصورة',
+                                icon: Icons.qr_code_2,
+                                onPressed: _pick,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        SilverButton(label: 'إضافة', loading: _saving, onPressed: _save),
+                        StatusMsg(_msg, error: _msgError),
+                      ],
+                    ),
+                  ),
+                  const SectionTitle('طرق الدفع الحالية'),
+                  if (list.isEmpty)
+                    const Panel(child: EmptyText('لا توجد طرق دفع'))
+                  else
+                    ...list.map((p) => Panel(
+                          padding: const EdgeInsets.all(14),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: Column(
+                            children: [
+                              if (p.qrUrl != null && p.qrUrl!.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: CachedNetworkImage(
+                                      imageUrl: p.qrUrl!,
+                                      height: 170,
+                                      fit: BoxFit.contain,
+                                      errorWidget: (_, __, ___) =>
+                                          const Icon(Icons.broken_image),
+                                    ),
+                                  ),
+                                ),
+                              Text(p.name,
+                                  style: const TextStyle(
+                                      color: AppColors.textTitle,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600)),
+                              if (p.accountNumber != null && p.accountNumber!.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: SelectableText('رقم الحساب: ${p.accountNumber}',
+                                      style: const TextStyle(color: AppColors.textLabel)),
+                                ),
+                              const SizedBox(height: 10),
+                              MiniButton('حذف', MiniKind.del, () async {
+                                final ok =
+                                    await confirmDialog(context, 'حذف طريقة الدفع دي؟');
+                                if (ok && context.mounted) {
+                                  context.read<AppState>().deletePaymentMethod(p.id);
+                                }
+                              }),
+                            ],
+                          ),
+                        )),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/pos_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'dart:io';
+
+          import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../models/models.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/barcode_scanner_page.dart';
+          import '../../widgets/common.dart';
+
+          /// شاشة البيع — نفس الكود لبيع النافذة (kiosk=false) وبيع الكشك (kiosk=true)
+          class PosTab extends StatefulWidget {
+            final bool kiosk;
+            const PosTab({super.key, required this.kiosk});
+
+            @override
+            State<PosTab> createState() => _PosTabState();
+          }
+
+          class _PosTabState extends State<PosTab> {
+            final List<CartItem> _cart = [];
+            final _search = TextEditingController();
+
+            bool _completing = false;
+            String? _saleMsg;
+
+            // مرحلة الفاتورة
+            bool _showInvoice = false;
+            String? _saleId;
+            List<LineItem> _invoiceItems = [];
+            double _invoiceTotal = 0;
+            bool _uploading = false;
+            String? _receiptMsg;
+            bool _receiptError = false;
+
+            String get _location => widget.kiosk ? 'kiosk' : 'main';
+
+            double get _total => _cart.fold(0, (s, c) => s + c.price * c.qty);
+
+            @override
+            void dispose() {
+              _search.dispose();
+              super.dispose();
+            }
+
+            // ---------- السلة ----------
+            void _add(Product p) {
+              if (p.stock <= 0) {
+                toast(context, 'هذا المنتج غير متوفر في المخزون', error: true);
+                return;
+              }
+              setState(() {
+                final existing = _cart.where((c) => c.productId == p.id).firstOrNull;
+                if (existing != null) {
+                  if (existing.qty < p.stock) existing.qty++;
+                } else {
+                  _cart.add(CartItem(
+                      productId: p.id, title: p.title, price: p.price, maxStock: p.stock));
+                }
+              });
+            }
+
+            Future<void> _scan() async {
+              final code = await scanBarcode(context);
+              if (code == null || !mounted) return;
+              final products = context.read<AppState>().products;
+              final p = products.where((x) => x.barcode == code).firstOrNull;
+              if (p == null) {
+                toast(context, 'لم يتم العثور على منتج بهذا الباركود', error: true);
+                return;
+              }
+              _add(p);
+            }
+
+            void _inc(CartItem c) => setState(() {
+                  if (c.qty < c.maxStock) c.qty++;
+                });
+
+            void _dec(CartItem c) => setState(() {
+                  c.qty--;
+                  if (c.qty <= 0) _cart.remove(c);
+                });
+
+            // ---------- إتمام البيع ----------
+            Future<void> _complete() async {
+              if (_cart.isEmpty) return;
+              final state = context.read<AppState>();
+              final snapshot = List<CartItem>.from(_cart);
+              final total = _total;
+
+              setState(() {
+                _completing = true;
+                _saleMsg = null;
+              });
+
+              try {
+                final id = await state.api.completeSale(
+                  cart: snapshot,
+                  location: _location,
+                  soldBy: state.userId!,
+                );
+                if (state.role == 'admin') state.loadPosSales();
+                await state.loadProducts();
+
+                if (!mounted) return;
+                setState(() {
+                  _saleId = id;
+                  _invoiceItems = snapshot
+                      .map((c) => LineItem(title: c.title, price: c.price, qty: c.qty))
+                      .toList();
+                  _invoiceTotal = total;
+                  _cart.clear();
+                  _receiptMsg = null;
+                  _showInvoice = true;
+                });
+              } catch (e) {
+                if (mounted) setState(() => _saleMsg = 'خطأ: $e');
+              } finally {
+                if (mounted) setState(() => _completing = false);
+              }
+            }
+
+            // ---------- إشعار الحوالة ----------
+            Future<void> _captureReceipt() async {
+              final x = await ImagePicker()
+                  .pickImage(source: ImageSource.camera, imageQuality: 90);
+              if (x == null) return;
+              if (_saleId == null) {
+                setState(() {
+                  _receiptMsg = 'تعذر ربط الإيصال بعملية البيع';
+                  _receiptError = true;
+                });
+                return;
+              }
+              final state = context.read<AppState>();
+              setState(() {
+                _uploading = true;
+                _receiptMsg = 'جاري رفع الصورة...';
+                _receiptError = false;
+              });
+              try {
+                final url = await state.api.uploadImage(
+                  file: File(x.path),
+                  bucket: Config.bucketTransfers,
+                  prefix: widget.kiosk ? '_kiosk' : '_pos',
+                );
+                await state.api.attachSaleReceipt(_saleId!, url);
+                if (mounted) {
+                  setState(() {
+                    _receiptMsg = 'تم إرفاق الإشعار بنجاح';
+                    _receiptError = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _receiptMsg = 'خطأ: $e';
+                    _receiptError = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _uploading = false);
+              }
+            }
+
+            void _newSale() => setState(() {
+                  _saleId = null;
+                  _receiptMsg = null;
+                  _showInvoice = false;
+                });
+
+            // ---------- الواجهة ----------
+            @override
+            Widget build(BuildContext context) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: _showInvoice ? _invoiceStage() : _saleStage(),
+              );
+            }
+
+            List<Widget> _saleStage() {
+              final products = context.watch<AppState>().products;
+              final q = _search.text.trim().toLowerCase();
+              final matches = q.isEmpty
+                  ? <Product>[]
+                  : products
+                      .where((p) => p.title.toLowerCase().contains(q))
+                      .take(6)
+                      .toList();
+
+              return [
+                // ---- البحث / المسح ----
+                Panel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SilverButton(
+                          label: 'مسح باركود المنتج',
+                          icon: Icons.qr_code_scanner,
+                          onPressed: _scan),
+                      const SizedBox(height: 16),
+                      LabeledField(
+                        label: 'أو ابحث بالاسم',
+                        controller: _search,
+                        hint: 'اكتب اسم المنتج...',
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      ...matches.map((p) => InkWell(
+                            onTap: () {
+                              _add(p);
+                              _search.clear();
+                              setState(() {});
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(top: 8),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.divider),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                      child: Text('${p.title} — ${money(p.price)}')),
+                                  Text('${p.stock} متوفر',
+                                      style: const TextStyle(color: AppColors.success)),
+                                ],
+                              ),
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+
+                // ---- الفاتورة الحالية ----
+                Panel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SectionTitle(
+                          widget.kiosk ? 'فاتورة الكشك الحالية' : 'الفاتورة الحالية'),
+                      if (_cart.isEmpty)
+                        const EmptyText('لم تتم إضافة أي منتج بعد')
+                      else ...[
+                        ..._cart.map((c) => Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: const BoxDecoration(
+                                border: Border(
+                                    bottom: BorderSide(color: AppColors.divider)),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(c.title,
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 2),
+                                        Text(money(c.price),
+                                            style: const TextStyle(
+                                                color: AppColors.priceBlue)),
+                                      ],
+                                    ),
+                                  ),
+                                  _QtyBtn('-', () => _dec(c)),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    child: Text('${c.qty}',
+                                        style: const TextStyle(fontSize: 15)),
+                                  ),
+                                  _QtyBtn('+', () => _inc(c)),
+                                  const SizedBox(width: 10),
+                                  InkWell(
+                                    onTap: () => setState(() => _cart.remove(c)),
+                                    child: Container(
+                                      width: 28,
+                                      height: 28,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: AppColors.danger),
+                                      ),
+                                      child: const Icon(Icons.close,
+                                          size: 16, color: AppColors.danger),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )),
+                        Container(
+                          margin: const EdgeInsets.only(top: 8, bottom: 16),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          decoration: const BoxDecoration(
+                            border: Border(top: BorderSide(color: AppColors.borderSilver)),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('الإجمالي',
+                                  style: TextStyle(
+                                      color: AppColors.textTitle,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold)),
+                              Text(money(_total),
+                                  style: const TextStyle(
+                                      color: AppColors.textTitle,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ],
+                      SilverButton(
+                        label: 'إتمام البيع',
+                        loading: _completing,
+                        onPressed: _cart.isEmpty ? null : _complete,
+                      ),
+                      StatusMsg(_saleMsg, error: true),
+                    ],
+                  ),
+                ),
+              ];
+            }
+
+            List<Widget> _invoiceStage() {
+              return [
+                Panel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SectionTitle(widget.kiosk
+                          ? 'تمت عملية بيع الكشك بنجاح'
+                          : 'تمت عملية البيع بنجاح'),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        margin: const EdgeInsets.only(bottom: 18),
+                        decoration: BoxDecoration(
+                          color: AppColors.inputBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.borderSilver),
+                        ),
+                        child: Column(
+                          children: [
+                            ..._invoiceItems.map((it) => Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 7),
+                                  decoration: const BoxDecoration(
+                                    border: Border(
+                                        bottom: BorderSide(color: AppColors.divider)),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                          child: Text('${it.title} × ${it.qty}',
+                                              style: const TextStyle(
+                                                  color: AppColors.textSoft))),
+                                      Text(money(it.price * it.qty),
+                                          style: const TextStyle(
+                                              color: AppColors.textSoft)),
+                                    ],
+                                  ),
+                                )),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('الإجمالي',
+                                      style: TextStyle(
+                                          color: AppColors.textTitle,
+                                          fontWeight: FontWeight.bold)),
+                                  Text(money(_invoiceTotal),
+                                      style: const TextStyle(
+                                          color: AppColors.textTitle,
+                                          fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SilverButton(
+                        label: 'التقاط صورة إشعار الحوالة',
+                        icon: Icons.photo_camera,
+                        loading: _uploading,
+                        onPressed: _captureReceipt,
+                      ),
+                      StatusMsg(_receiptMsg, error: _receiptError),
+                      const SizedBox(height: 10),
+                      OutlineBtn(label: 'بيع جديد', onPressed: _newSale),
+                    ],
+                  ),
+                ),
+              ];
+            }
+          }
+
+          class _QtyBtn extends StatelessWidget {
+            final String label;
+            final VoidCallback onTap;
+            const _QtyBtn(this.label, this.onTap);
+
+            @override
+            Widget build(BuildContext context) => InkWell(
+                  onTap: onTap,
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.borderSilver),
+                    ),
+                    child: Text(label,
+                        style: const TextStyle(color: AppColors.textLabel, fontSize: 17)),
+                  ),
+                );
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/products_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'dart:io';
+
+          import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../models/models.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/barcode_scanner_page.dart';
+          import '../../widgets/common.dart';
+
+          class ProductsTab extends StatefulWidget {
+            const ProductsTab({super.key});
+
+            @override
+            State<ProductsTab> createState() => _ProductsTabState();
+          }
+
+          class _ProductsTabState extends State<ProductsTab> {
+            final _title = TextEditingController();
+            final _desc = TextEditingController();
+            final _price = TextEditingController();
+            final _stock = TextEditingController();
+            final _barcode = TextEditingController();
+            final _origPrice = TextEditingController();
+            final _scroll = ScrollController();
+
+            bool _isOffer = false;
+            File? _image;
+            String? _editingId;
+            String? _editingTitle;
+            bool _saving = false;
+            String? _msg;
+            bool _msgError = false;
+
+            @override
+            void dispose() {
+              for (final c in [_title, _desc, _price, _stock, _barcode, _origPrice]) {
+                c.dispose();
+              }
+              _scroll.dispose();
+              super.dispose();
+            }
+
+            void _reset() {
+              setState(() {
+                _editingId = null;
+                _editingTitle = null;
+                _image = null;
+                _isOffer = false;
+                for (final c in [_title, _desc, _price, _stock, _barcode, _origPrice]) {
+                  c.clear();
+                }
+              });
+            }
+
+            void _edit(Product p) {
+              setState(() {
+                _editingId = p.id;
+                _editingTitle = p.title;
+                _title.text = p.title;
+                _desc.text = p.description;
+                _price.text = _fmtNum(p.price);
+                _stock.text = '${p.stock}';
+                _barcode.text = p.barcode;
+                _origPrice.text = p.originalPrice == null ? '' : _fmtNum(p.originalPrice!);
+                _isOffer = p.isOffer;
+                _image = null;
+                _msg = null;
+              });
+              _scroll.animateTo(0,
+                  duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+            }
+
+            String _fmtNum(double v) =>
+                v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+            Future<void> _pickImage() async {
+              final x = await ImagePicker().pickImage(source: ImageSource.gallery);
+              if (x != null) setState(() => _image = File(x.path));
+            }
+
+            Future<void> _scan() async {
+              final code = await scanBarcode(context);
+              if (code != null) setState(() => _barcode.text = code);
+            }
+
+            Future<void> _save() async {
+              final title = _title.text.trim();
+              final desc = _desc.text.trim();
+              final price = double.tryParse(_price.text.trim());
+              final stock = int.tryParse(_stock.text.trim());
+              final orig = _origPrice.text.trim().isEmpty
+                  ? null
+                  : double.tryParse(_origPrice.text.trim());
+
+              if (title.isEmpty || desc.isEmpty || price == null || stock == null) {
+                setState(() {
+                  _msg = 'الرجاء ملء جميع الحقول بشكل صحيح';
+                  _msgError = true;
+                });
+                return;
+              }
+
+              final state = context.read<AppState>();
+              setState(() {
+                _saving = true;
+                _msg = null;
+              });
+
+              try {
+                String? imageUrl;
+                if (_image != null) {
+                  try {
+                    imageUrl = await state.api
+                        .uploadImage(file: _image!, bucket: Config.bucketProducts);
+                  } catch (e) {
+                    throw 'تعذر رفع الصورة: $e';
+                  }
+                }
+                await state.api.saveProduct(
+                  editingId: _editingId,
+                  title: title,
+                  description: desc,
+                  price: price,
+                  stock: stock,
+                  isOffer: _isOffer,
+                  originalPrice: orig,
+                  barcode: _barcode.text.trim(),
+                  imageUrl: imageUrl,
+                );
+                _reset();
+                await state.loadProducts();
+                if (mounted) {
+                  setState(() {
+                    _msg = 'تم الحفظ بنجاح';
+                    _msgError = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _msg = e.toString().startsWith('تعذر رفع')
+                        ? e.toString()
+                        : 'خطأ أثناء الحفظ: $e';
+                    _msgError = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _saving = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final s = context.watch<AppState>();
+
+              return ListView(
+                controller: _scroll,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  // ================= الفورم =================
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SectionTitle(_editingId == null
+                            ? 'إضافة منتج'
+                            : 'تعديل منتج: $_editingTitle'),
+                        LabeledField(label: 'اسم المنتج', controller: _title),
+                        LabeledField(label: 'الوصف', controller: _desc),
+                        LabeledField(
+                            label: 'السعر (جنيه)',
+                            controller: _price,
+                            keyboard: const TextInputType.numberWithOptions(decimal: true)),
+                        LabeledField(
+                            label: 'الكمية المتوفرة',
+                            controller: _stock,
+                            keyboard: TextInputType.number),
+                        LabeledField(
+                          label: 'الباركود (اختياري)',
+                          controller: _barcode,
+                          suffix: IconButton(
+                            tooltip: 'مسح',
+                            icon: const Icon(Icons.qr_code_scanner,
+                                color: AppColors.accentBlue),
+                            onPressed: _scan,
+                          ),
+                        ),
+                        LabeledField(
+                            label: 'السعر قبل الخصم (اختياري)',
+                            controller: _origPrice,
+                            keyboard: const TextInputType.numberWithOptions(decimal: true)),
+                        CheckboxListTile(
+                          value: _isOffer,
+                          onChanged: (v) => setState(() => _isOffer = v ?? false),
+                          title: const Text('عرض خاص',
+                              style: TextStyle(color: AppColors.textLabel, fontSize: 14)),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                        const SizedBox(height: 6),
+                        const Text('صورة المنتج (اختياري)',
+                            style: TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            if (_image != null)
+                              Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 10),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.file(_image!,
+                                      width: 48, height: 48, fit: BoxFit.cover),
+                                ),
+                              ),
+                            Expanded(
+                              child: OutlineBtn(
+                                label: _image == null ? 'اختيار صورة' : 'تغيير الصورة',
+                                icon: Icons.image_outlined,
+                                onPressed: _pickImage,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        SilverButton(
+                          label: 'حفظ المنتج',
+                          loading: _saving,
+                          onPressed: _save,
+                        ),
+                        if (_editingId != null) ...[
+                          const SizedBox(height: 8),
+                          OutlineBtn(label: 'إلغاء التعديل', onPressed: _reset),
+                        ],
+                        StatusMsg(_msg, error: _msgError),
+                      ],
+                    ),
+                  ),
+
+                  // ================= القائمة =================
+                  Panel(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SectionTitle('قائمة المنتجات (${s.products.length})'),
+                        if (s.products.isEmpty)
+                          const EmptyText('لا توجد منتجات')
+                        else
+                          ...s.products.map((p) => _ProductRow(
+                                product: p,
+                                onEdit: () => _edit(p),
+                                onDelete: () async {
+                                  final ok = await confirmDialog(
+                                      context, 'هل أنت متأكد من حذف هذا المنتج؟');
+                                  if (ok && context.mounted) {
+                                    context.read<AppState>().deleteProduct(p.id);
+                                  }
+                                },
+                              )),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+          }
+
+          class _ProductRow extends StatelessWidget {
+            final Product product;
+            final VoidCallback onEdit;
+            final VoidCallback onDelete;
+            const _ProductRow(
+                {required this.product, required this.onEdit, required this.onDelete});
+
+            @override
+            Widget build(BuildContext context) {
+              final p = product;
+              return Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: AppColors.divider)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Thumb(p.imageUrl),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(p.title,
+                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(money(p.price),
+                                  style: const TextStyle(color: AppColors.priceBlue)),
+                              if (p.isOffer) const Pill('عرض', PillKind.offer),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'المخزون: ${p.stock}  •  الباركود: ${p.barcode.isEmpty ? '-' : p.barcode}',
+                            style: const TextStyle(
+                                color: AppColors.textMuted, fontSize: 12),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              MiniButton('تعديل', MiniKind.edit, onEdit),
+                              const SizedBox(width: 8),
+                              MiniButton('حذف', MiniKind.del, onDelete),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/reports_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../models/models.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          class _ReportRow {
+            final String source;
+            final int qty;
+            final DateTime? date;
+            _ReportRow(this.source, this.qty, this.date);
+          }
+
+          class ReportsTab extends StatefulWidget {
+            const ReportsTab({super.key});
+
+            @override
+            State<ReportsTab> createState() => _ReportsTabState();
+          }
+
+          class _ReportsTabState extends State<ReportsTab> {
+            final _search = TextEditingController();
+            String? _selectedTitle;
+            String _source = 'all'; // all | online | main | kiosk
+            DateTime? _from;
+            DateTime? _to;
+
+            bool _loading = false;
+            List<_ReportRow>? _rows;
+
+            static const _sources = {
+              'all': 'كل المصادر',
+              'online': 'أونلاين',
+              'main': 'بيع النافذة (الفرع الرئيسي)',
+              'kiosk': 'الكشك',
+            };
+
+            @override
+            void dispose() {
+              _search.dispose();
+              super.dispose();
+            }
+
+            Future<void> _pickDate(bool isFrom) async {
+              final now = DateTime.now();
+              final d = await showDatePicker(
+                context: context,
+                initialDate: (isFrom ? _from : _to) ?? now,
+                firstDate: DateTime(2020),
+                lastDate: DateTime(now.year + 1),
+                locale: const Locale('ar', 'EG'),
+              );
+              if (d != null) setState(() => isFrom ? _from = d : _to = d);
+            }
+
+            String _dateLabel(DateTime? d) => d == null
+                ? 'اختر التاريخ'
+                : '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+
+            Future<void> _run() async {
+              if (_selectedTitle == null) {
+                toast(context, 'الرجاء اختيار منتج أولاً من نتائج البحث تحت خانة الاسم',
+                    error: true);
+                return;
+              }
+              final state = context.read<AppState>();
+              setState(() => _loading = true);
+
+              try {
+                final results = await Future.wait([
+                  state.api.fetchOrdersForReport(_from, _to),
+                  state.api.fetchPosForReport(_from, _to),
+                ]);
+
+                final rows = <_ReportRow>[];
+
+                if (_source == 'all' || _source == 'online') {
+                  for (final o in results[0]) {
+                    final date = DateTime.tryParse('${o['created_at']}');
+                    for (final raw in (o['items'] as List? ?? [])) {
+                      final it = LineItem.fromJson(Map<String, dynamic>.from(raw));
+                      if (it.title == _selectedTitle) {
+                        rows.add(_ReportRow('أونلاين', it.qty, date));
+                      }
+                    }
+                  }
+                }
+
+                for (final s in results[1]) {
+                  final loc = (s['location'] ?? 'main') as String;
+                  if (_source == 'online') continue;
+                  if (_source == 'main' && loc != 'main') continue;
+                  if (_source == 'kiosk' && loc != 'kiosk') continue;
+
+                  final label = loc == 'kiosk' ? 'الكشك' : 'بيع النافذة';
+                  final date = DateTime.tryParse('${s['created_at']}');
+                  for (final raw in (s['items'] as List? ?? [])) {
+                    final it = LineItem.fromJson(Map<String, dynamic>.from(raw));
+                    if (it.title == _selectedTitle) {
+                      rows.add(_ReportRow(label, it.qty, date));
+                    }
+                  }
+                }
+
+                rows.sort((a, b) =>
+                    (b.date ?? DateTime(0)).compareTo(a.date ?? DateTime(0)));
+                setState(() => _rows = rows);
+              } catch (e) {
+                if (mounted) toast(context, 'تعذر تحميل التقرير: $e', error: true);
+              } finally {
+                if (mounted) setState(() => _loading = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final products = context.watch<AppState>().products;
+              final q = _search.text.trim().toLowerCase();
+              final matches = (q.isEmpty || _selectedTitle != null)
+                  ? <Product>[]
+                  : products.where((p) => p.title.toLowerCase().contains(q)).take(6).toList();
+
+              final totalQty = _rows?.fold<int>(0, (s, r) => s + r.qty) ?? 0;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('تقرير مبيعات منتج'),
+                        const Text('اختر المنتج',
+                            style: TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _search,
+                          decoration: const InputDecoration(hintText: 'اكتب اسم المنتج...'),
+                          onChanged: (_) => setState(() => _selectedTitle = null),
+                        ),
+                        ...matches.map((p) => InkWell(
+                              onTap: () => setState(() {
+                                _selectedTitle = p.title;
+                                _search.text = p.title;
+                              }),
+                              child: Container(
+                                margin: const EdgeInsets.only(top: 8),
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: AppColors.divider),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(child: Text(p.title)),
+                                    Text('${p.stock} بالمخزون',
+                                        style:
+                                            const TextStyle(color: AppColors.success)),
+                                  ],
+                                ),
+                              ),
+                            )),
+                        const SizedBox(height: 14),
+                        const Text('المصدر',
+                            style: TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                        const SizedBox(height: 6),
+                        DropdownButtonFormField<String>(
+                          value: _source,
+                          dropdownColor: AppColors.panelNavy2,
+                          items: _sources.entries
+                              .map((e) =>
+                                  DropdownMenuItem(value: e.key, child: Text(e.value)))
+                              .toList(),
+                          onChanged: (v) => setState(() => _source = v ?? 'all'),
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(child: _dateField('من تاريخ', _from, () => _pickDate(true))),
+                            const SizedBox(width: 10),
+                            Expanded(child: _dateField('إلى تاريخ', _to, () => _pickDate(false))),
+                          ],
+                        ),
+                        if (_from != null || _to != null)
+                          Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: TextButton(
+                              onPressed: () => setState(() {
+                                _from = null;
+                                _to = null;
+                              }),
+                              child: const Text('مسح التواريخ',
+                                  style: TextStyle(color: AppColors.textLabel)),
+                            ),
+                          ),
+                        const SizedBox(height: 10),
+                        SilverButton(
+                            label: 'عرض التقرير', loading: _loading, onPressed: _run),
+                      ],
+                    ),
+                  ),
+
+                  if (_rows != null)
+                    Panel(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                  child: SizedBox(
+                                      height: 84,
+                                      child: StatTile('$totalQty', 'إجمالي الكمية المباعة'))),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: SizedBox(
+                                      height: 84,
+                                      child: StatTile('${_rows!.length}', 'عدد العمليات'))),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          const SectionTitle('تفاصيل العمليات'),
+                          if (_rows!.isEmpty)
+                            const EmptyText('لا توجد عمليات بيع لهذا المنتج في هذه الفترة')
+                          else
+                            ..._rows!.map((r) => Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  decoration: const BoxDecoration(
+                                    border: Border(
+                                        bottom: BorderSide(color: AppColors.divider)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                          flex: 3,
+                                          child: Text(r.source,
+                                              style: const TextStyle(
+                                                  color: AppColors.textSoft))),
+                                      Expanded(
+                                          flex: 2,
+                                          child: Text('الكمية: ${r.qty}',
+                                              style: const TextStyle(
+                                                  color: AppColors.priceBlue))),
+                                      Expanded(
+                                          flex: 5,
+                                          child: Text(fmtDate(r.date),
+                                              textAlign: TextAlign.end,
+                                              style: const TextStyle(
+                                                  color: AppColors.textMuted,
+                                                  fontSize: 12))),
+                                    ],
+                                  ),
+                                )),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            }
+
+            Widget _dateField(String label, DateTime? value, VoidCallback onTap) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: onTap,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.inputBg,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppColors.borderSilver),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.calendar_today,
+                              size: 15, color: AppColors.textLabel),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(_dateLabel(value),
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: value == null
+                                        ? AppColors.textDim
+                                        : AppColors.textMain)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/settings_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+
+          class SettingsTab extends StatefulWidget {
+            const SettingsTab({super.key});
+
+            @override
+            State<SettingsTab> createState() => _SettingsTabState();
+          }
+
+          class _SettingsTabState extends State<SettingsTab> {
+            final _shopName = TextEditingController();
+            final _whatsapp = TextEditingController();
+            final _facebook = TextEditingController();
+            final _cs = TextEditingController();
+            final _location = TextEditingController();
+            final _terms = TextEditingController();
+            final _newPass = TextEditingController();
+
+            bool _savingSettings = false;
+            bool _savingPass = false;
+            String? _settingsMsg;
+            bool _settingsErr = false;
+            String? _passMsg;
+            bool _passErr = false;
+            bool _filled = false;
+
+            @override
+            void dispose() {
+              for (final c in [_shopName, _whatsapp, _facebook, _cs, _location, _terms, _newPass]) {
+                c.dispose();
+              }
+              super.dispose();
+            }
+
+            void _fillFrom(AppState s) {
+              final st = s.settings;
+              _shopName.text = st.shopName;
+              _whatsapp.text = st.whatsapp;
+              _facebook.text = st.facebook;
+              _cs.text = st.customerServiceNumber;
+              _location.text = st.location;
+              _terms.text = st.termsText;
+            }
+
+            @override
+            void didChangeDependencies() {
+              super.didChangeDependencies();
+              // نملأ الحقول مرة واحدة أول ما الإعدادات توصل (عشان ما نمسحش اللي المستخدم بيكتبه)
+              final s = context.read<AppState>();
+              if (!_filled && s.settings.shopName.isNotEmpty) {
+                _fillFrom(s);
+                _filled = true;
+              }
+            }
+
+            Future<void> _saveSettings() async {
+              final sn = _shopName.text.trim();
+              final wa = _whatsapp.text.trim();
+              if (sn.isEmpty || wa.isEmpty) {
+                setState(() {
+                  _settingsMsg = 'اسم المكتبة ورقم الواتساب مطلوبان';
+                  _settingsErr = true;
+                });
+                return;
+              }
+              final state = context.read<AppState>();
+              setState(() {
+                _savingSettings = true;
+                _settingsMsg = null;
+              });
+              try {
+                await state.api.saveSettings(
+                  shopName: sn,
+                  whatsapp: wa,
+                  facebook: _facebook.text.trim(),
+                  customerService: _cs.text.trim(),
+                  location: _location.text.trim(),
+                  terms: _terms.text,
+                );
+                await state.loadSettings();
+                if (mounted) {
+                  setState(() {
+                    _settingsMsg = 'تم حفظ الإعدادات بنجاح';
+                    _settingsErr = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _settingsMsg = 'خطأ أثناء الحفظ: $e';
+                    _settingsErr = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _savingSettings = false);
+              }
+            }
+
+            Future<void> _changePass() async {
+              final p = _newPass.text;
+              if (p.length < 6) {
+                setState(() {
+                  _passMsg = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
+                  _passErr = true;
+                });
+                return;
+              }
+              setState(() {
+                _savingPass = true;
+                _passMsg = null;
+              });
+              try {
+                await context.read<AppState>().api.changePassword(p);
+                if (mounted) {
+                  _newPass.clear();
+                  setState(() {
+                    _passMsg = 'تم تحديث كلمة المرور بنجاح';
+                    _passErr = false;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _passMsg = 'فشل التحديث: $e';
+                    _passErr = true;
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _savingPass = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('بيانات المتجر'),
+                        LabeledField(label: 'اسم المكتبة', controller: _shopName),
+                        LabeledField(
+                            label: 'رقم الواتساب (بدون +)',
+                            controller: _whatsapp,
+                            keyboard: TextInputType.phone),
+                        LabeledField(
+                            label: 'رابط صفحة الفيسبوك',
+                            controller: _facebook,
+                            keyboard: TextInputType.url),
+                        LabeledField(
+                            label: 'رقم خدمة العملاء',
+                            controller: _cs,
+                            keyboard: TextInputType.phone),
+                        LabeledField(label: 'موقع المكتبة', controller: _location),
+                        LabeledField(
+                            label: 'نص الشروط والأحكام',
+                            controller: _terms,
+                            maxLines: 6),
+                        SilverButton(
+                            label: 'حفظ الإعدادات',
+                            loading: _savingSettings,
+                            onPressed: _saveSettings),
+                        StatusMsg(_settingsMsg, error: _settingsErr),
+                      ],
+                    ),
+                  ),
+                  Panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionTitle('تغيير كلمة المرور'),
+                        LabeledField(
+                            label: 'كلمة المرور الجديدة',
+                            controller: _newPass,
+                            obscure: true),
+                        SilverButton(
+                            label: 'تحديث كلمة المرور',
+                            loading: _savingPass,
+                            onPressed: _changePass),
+                        StatusMsg(_passMsg, error: _passErr),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/screens/tabs
+          cat > lib/screens/tabs/special_orders_tab.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:provider/provider.dart';
+
+          import '../../core/constants.dart';
+          import '../../core/theme.dart';
+          import '../../models/models.dart';
+          import '../../providers/app_state.dart';
+          import '../../widgets/common.dart';
+          import 'orders_tab.dart' show InfoLine;
+
+          /// كارت طلب خاص — بإجراءات أو عرض فقط
+          class SpecialOrderCard extends StatelessWidget {
+            final SpecialOrder order;
+            final bool readOnly;
+            const SpecialOrderCard({super.key, required this.order, this.readOnly = false});
+
+            @override
+            Widget build(BuildContext context) {
+              final s = order;
+              final state = context.read<AppState>();
+
+              return Panel(
+                padding: const EdgeInsets.all(14),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(s.name,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 15.5)),
+                        ),
+                        Pill.status(s.isDone),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    InfoLine('الهاتف',
+                        Text(s.phone, style: const TextStyle(color: AppColors.textSoft))),
+                    InfoLine('الوصف',
+                        Text(s.description,
+                            style: const TextStyle(color: AppColors.textSoft, height: 1.5))),
+                    InfoLine('التاريخ',
+                        Text(fmtDate(s.createdAt),
+                            style: const TextStyle(color: AppColors.textSoft))),
+                    if (!readOnly) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if (!s.isDone) ...[
+                            MiniButton('إتمام', MiniKind.done,
+                                () => state.markSpecialDone(s.id)),
+                            const SizedBox(width: 8),
+                          ],
+                          MiniButton('حذف', MiniKind.del, () async {
+                            final ok =
+                                await confirmDialog(context, 'حذف هذا الطلب الخاص؟');
+                            if (ok) state.deleteSpecial(s.id);
+                          }),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }
+          }
+
+          class SpecialOrdersTab extends StatelessWidget {
+            const SpecialOrdersTab({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final list = context.watch<AppState>().specialOrders;
+
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                children: [
+                  SectionTitle('الطلبات الخاصة (${list.length})'),
+                  if (list.isEmpty)
+                    const Panel(child: EmptyText('لا توجد طلبات خاصة'))
+                  else
+                    ...list.map((s) => SpecialOrderCard(order: s)),
+                ],
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/services
+          cat > lib/services/api.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'dart:io';
+          import 'package:flutter_image_compress/flutter_image_compress.dart';
+          import 'package:path_provider/path_provider.dart';
+          import 'package:supabase_flutter/supabase_flutter.dart';
+
+          import '../core/constants.dart';
+          import '../models/models.dart';
+
+          /// طبقة الاتصال بـ Supabase — نفس الجداول والـ RPC المستخدمة في نسخة الويب.
+          class Api {
+            SupabaseClient get _db => Supabase.instance.client;
+
+            // ================= المصادقة =================
+            Future<AuthResponse> signIn(String email, String password) =>
+                _db.auth.signInWithPassword(email: email, password: password);
+
+            Future<void> signOut() => _db.auth.signOut();
+
+            Future<void> changePassword(String newPassword) async {
+              await _db.auth.updateUser(UserAttributes(password: newPassword));
+            }
+
+            User? get currentUser => _db.auth.currentUser;
+
+            Future<String?> fetchMyRole(String userId) async {
+              final data = await _db
+                  .from('staff_roles')
+                  .select('role')
+                  .eq('user_id', userId);
+              if (data.isEmpty) return null;
+              return data.first['role'] as String?;
+            }
+
+            // ================= المنتجات =================
+            Future<List<Product>> fetchProducts() async {
+              final data =
+                  await _db.from('products').select().order('created_at', ascending: false);
+              return data.map<Product>((e) => Product.fromJson(e)).toList();
+            }
+
+            Future<void> saveProduct({
+              String? editingId,
+              required String title,
+              required String description,
+              required double price,
+              required int stock,
+              required bool isOffer,
+              double? originalPrice,
+              String? barcode,
+              String? imageUrl,
+            }) async {
+              final payload = <String, dynamic>{
+                'title': title,
+                'description': description,
+                'price': price,
+                'stock': stock,
+                'is_offer': isOffer,
+                'original_price': originalPrice,
+                'barcode': (barcode == null || barcode.isEmpty) ? null : barcode,
+              };
+              if (imageUrl != null) payload['image_url'] = imageUrl;
+
+              if (editingId != null) {
+                await _db.from('products').update(payload).eq('id', editingId);
+              } else {
+                payload['image_url'] ??= null;
+                await _db.from('products').insert(payload);
+              }
+            }
+
+            Future<void> deleteProduct(String id) =>
+                _db.from('products').delete().eq('id', id);
+
+            // ================= الطلبات =================
+            Future<List<Order>> fetchOrders() async {
+              final data =
+                  await _db.from('orders').select().order('created_at', ascending: false);
+              return data.map<Order>((e) => Order.fromJson(e)).toList();
+            }
+
+            Future<void> markOrderDone(String id) =>
+                _db.from('orders').update({'status': 'done'}).eq('id', id);
+
+            Future<void> deleteOrder(String id) =>
+                _db.from('orders').delete().eq('id', id);
+
+            // ================= الطلبات الخاصة =================
+            Future<List<SpecialOrder>> fetchSpecialOrders() async {
+              final data = await _db
+                  .from('special_orders')
+                  .select()
+                  .order('created_at', ascending: false);
+              return data.map<SpecialOrder>((e) => SpecialOrder.fromJson(e)).toList();
+            }
+
+            Future<void> markSpecialDone(String id) =>
+                _db.from('special_orders').update({'status': 'done'}).eq('id', id);
+
+            Future<void> deleteSpecial(String id) =>
+                _db.from('special_orders').delete().eq('id', id);
+
+            // ================= الإعلانات =================
+            Future<List<Announcement>> fetchAnnouncements() async {
+              final data = await _db
+                  .from('announcements')
+                  .select()
+                  .order('created_at', ascending: false);
+              return data.map<Announcement>((e) => Announcement.fromJson(e)).toList();
+            }
+
+            Future<void> addAnnouncement(String text, String? imageUrl) async {
+              final payload = <String, dynamic>{'text': text};
+              if (imageUrl != null) payload['image_url'] = imageUrl;
+              await _db.from('announcements').insert(payload);
+            }
+
+            Future<void> deleteAnnouncement(String id) =>
+                _db.from('announcements').delete().eq('id', id);
+
+            // ================= طرق الدفع =================
+            Future<List<PaymentMethod>> fetchPaymentMethods() async {
+              final data = await _db
+                  .from('payment_methods')
+                  .select()
+                  .order('created_at', ascending: false);
+              return data.map<PaymentMethod>((e) => PaymentMethod.fromJson(e)).toList();
+            }
+
+            Future<void> addPaymentMethod(
+                String name, String? account, String? qrUrl) async {
+              final payload = <String, dynamic>{
+                'name': name,
+                'account_number': (account == null || account.isEmpty) ? null : account,
+              };
+              if (qrUrl != null) payload['qr_image_url'] = qrUrl;
+              await _db.from('payment_methods').insert(payload);
+            }
+
+            Future<void> deletePaymentMethod(String id) =>
+                _db.from('payment_methods').delete().eq('id', id);
+
+            // ================= بيع النافذة / الكشك =================
+            Future<List<PosSale>> fetchPosSales() async {
+              final data = await _db
+                  .from('pos_sales')
+                  .select('id,items,total,location,created_at')
+                  .order('created_at', ascending: false);
+              return data.map<PosSale>((e) => PosSale.fromJson(e)).toList();
+            }
+
+            /// يسجّل البيع ثم يخصم المخزون. يرجّع id عملية البيع.
+            Future<String> completeSale({
+              required List<CartItem> cart,
+              required String location, // main | kiosk
+              required String soldBy,
+            }) async {
+              final items = cart
+                  .map((c) => {'title': c.title, 'price': c.price, 'qty': c.qty})
+                  .toList();
+              final total = cart.fold<double>(0, (s, c) => s + c.price * c.qty);
+
+              final inserted = await _db
+                  .from('pos_sales')
+                  .insert({
+                    'items': items,
+                    'total': total,
+                    'sold_by': soldBy,
+                    'location': location,
+                  })
+                  .select('id')
+                  .single();
+
+              // خصم المخزون عبر نفس الـ RPC المستخدم في الويب
+              await Future.wait(cart.map((c) => _db.rpc(
+                    'decrement_stock',
+                    params: {'p_id': c.productId, 'qty': c.qty},
+                  )));
+
+              return inserted['id'].toString();
+            }
+
+            Future<void> attachSaleReceipt(String saleId, String url) => _db
+                .from('pos_sales')
+                .update({'payment_screenshot_url': url}).eq('id', saleId);
+
+            // ================= التقارير =================
+            Future<List<Map<String, dynamic>>> fetchOrdersForReport(
+                DateTime? from, DateTime? to) async {
+              var q = _db.from('orders').select('items,created_at');
+              if (from != null) q = q.gte('created_at', _dayStart(from));
+              if (to != null) q = q.lte('created_at', _dayEnd(to));
+              return List<Map<String, dynamic>>.from(await q);
+            }
+
+            Future<List<Map<String, dynamic>>> fetchPosForReport(
+                DateTime? from, DateTime? to) async {
+              var q = _db.from('pos_sales').select('items,location,created_at');
+              if (from != null) q = q.gte('created_at', _dayStart(from));
+              if (to != null) q = q.lte('created_at', _dayEnd(to));
+              return List<Map<String, dynamic>>.from(await q);
+            }
+
+            String _dayStart(DateTime d) =>
+                DateTime(d.year, d.month, d.day).toUtc().toIso8601String();
+            String _dayEnd(DateTime d) =>
+                DateTime(d.year, d.month, d.day, 23, 59, 59).toUtc().toIso8601String();
+
+            // ================= الإعدادات =================
+            Future<ShopSettings?> fetchSettings() async {
+              final data = await _db.from('settings').select().eq('id', 'main');
+              if (data.isEmpty) return null;
+              return ShopSettings.fromJson(data.first);
+            }
+
+            Future<void> saveSettings({
+              required String shopName,
+              required String whatsapp,
+              required String facebook,
+              required String customerService,
+              required String location,
+              required String terms,
+            }) =>
+                _db.from('settings').update({
+                  'shop_name': shopName,
+                  'whatsapp': whatsapp,
+                  'facebook': facebook.isEmpty ? '#' : facebook,
+                  'customer_service_number': customerService,
+                  'location': location,
+                  'terms_text': terms,
+                }).eq('id', 'main');
+
+            Future<void> setStatsResetAt(DateTime? when) => _db
+                .from('settings')
+                .update({'stats_reset_at': when?.toUtc().toIso8601String()}).eq(
+                    'id', 'main');
+
+            // ================= رفع الصور =================
+            /// يضغط الصورة ثم يرفعها ويرجّع الرابط العام.
+            Future<String> uploadImage({
+              required File file,
+              required String bucket,
+              String prefix = '',
+              int maxDim = 1280,
+              int quality = 72,
+              bool png = false,
+            }) async {
+              final compressed = await _compress(file, maxDim, quality, png);
+              final ext = png ? 'png' : 'jpg';
+              final path = '${DateTime.now().millisecondsSinceEpoch}$prefix.$ext';
+
+              await _db.storage.from(bucket).upload(
+                    path,
+                    compressed,
+                    fileOptions: FileOptions(
+                      contentType: png ? 'image/png' : 'image/jpeg',
+                      upsert: false,
+                    ),
+                  );
+              return _db.storage.from(bucket).getPublicUrl(path);
+            }
+
+            Future<File> _compress(File src, int maxDim, int quality, bool png) async {
+              try {
+                final dir = await getTemporaryDirectory();
+                final target =
+                    '${dir.path}/${DateTime.now().microsecondsSinceEpoch}.${png ? 'png' : 'jpg'}';
+                final out = await FlutterImageCompress.compressAndGetFile(
+                  src.absolute.path,
+                  target,
+                  minWidth: maxDim,
+                  minHeight: maxDim,
+                  quality: quality,
+                  format: png ? CompressFormat.png : CompressFormat.jpeg,
+                );
+                if (out == null) return src;
+                final f = File(out.path);
+                // لو الضغط كبّر الحجم نرجع للأصلي (نفس منطق النسخة الويب)
+                return (await f.length()) >= (await src.length()) ? src : f;
+              } catch (_) {
+                return src;
+              }
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/widgets
+          cat > lib/widgets/barcode_scanner_page.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:flutter/material.dart';
+          import 'package:mobile_scanner/mobile_scanner.dart';
+
+          import '../core/theme.dart';
+
+          /// شاشة مسح باركود بالكاميرا الحية.
+          /// الاستخدام: final code = await scanBarcode(context);
+          Future<String?> scanBarcode(BuildContext context) {
+            return Navigator.of(context).push<String>(
+              MaterialPageRoute(builder: (_) => const BarcodeScannerPage()),
+            );
+          }
+
+          class BarcodeScannerPage extends StatefulWidget {
+            const BarcodeScannerPage({super.key});
+
+            @override
+            State<BarcodeScannerPage> createState() => _BarcodeScannerPageState();
+          }
+
+          class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
+            final MobileScannerController _controller = MobileScannerController(
+              detectionSpeed: DetectionSpeed.noDuplicates,
+              facing: CameraFacing.back,
+              formats: const [
+                BarcodeFormat.ean13,
+                BarcodeFormat.ean8,
+                BarcodeFormat.upcA,
+                BarcodeFormat.upcE,
+                BarcodeFormat.code128,
+                BarcodeFormat.code39,
+                BarcodeFormat.qrCode,
+              ],
+            );
+            bool _handled = false;
+
+            @override
+            void dispose() {
+              _controller.dispose();
+              super.dispose();
+            }
+
+            void _onDetect(BarcodeCapture capture) {
+              if (_handled) return;
+              for (final b in capture.barcodes) {
+                final v = b.rawValue;
+                if (v != null && v.isNotEmpty) {
+                  _handled = true;
+                  Navigator.of(context).pop(v);
+                  return;
+                }
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final size = MediaQuery.of(context).size;
+              final box = size.width * 0.72;
+
+              return Scaffold(
+                backgroundColor: Colors.black,
+                appBar: AppBar(
+                  backgroundColor: Colors.black,
+                  title: const Text('مسح الباركود'),
+                  actions: [
+                    IconButton(
+                      tooltip: 'الفلاش',
+                      icon: ValueListenableBuilder<MobileScannerState>(
+                        valueListenable: _controller,
+                        builder: (_, state, __) => Icon(
+                          state.torchState == TorchState.on
+                              ? Icons.flash_on
+                              : Icons.flash_off,
+                          color: state.torchState == TorchState.on
+                              ? AppColors.warning
+                              : Colors.white70,
+                        ),
+                      ),
+                      onPressed: () => _controller.toggleTorch(),
+                    ),
+                    IconButton(
+                      tooltip: 'تبديل الكاميرا',
+                      icon: const Icon(Icons.cameraswitch, color: Colors.white70),
+                      onPressed: () => _controller.switchCamera(),
+                    ),
+                  ],
+                ),
+                body: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MobileScanner(
+                      controller: _controller,
+                      onDetect: _onDetect,
+                      errorBuilder: (context, error, child) => Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            error.errorCode == MobileScannerErrorCode.permissionDenied
+                                ? 'لازم تسمح للتطبيق باستخدام الكاميرا من إعدادات الجهاز'
+                                : 'تعذر تشغيل الكاميرا',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // إطار التوجيه
+                    Center(
+                      child: Container(
+                        width: box,
+                        height: box * 0.6,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppColors.accentBlue, width: 2.5),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                    const Positioned(
+                      bottom: 60,
+                      left: 0,
+                      right: 0,
+                      child: Text(
+                        'وجّه الكاميرا ناحية الباركود',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70, fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+          mkdir -p lib/widgets
+          cat > lib/widgets/common.dart << 'SALINY_EOF_MARKER_7f3a'
+          import 'package:cached_network_image/cached_network_image.dart';
+          import 'package:flutter/material.dart';
+          import 'package:url_launcher/url_launcher.dart';
+
+          import '../core/theme.dart';
+
+          /// خلفية متوهجة زي الـ bg-glow في النسخة الويب
+          class GlowBackground extends StatelessWidget {
+            final Widget child;
+            const GlowBackground({super.key, required this.child});
+
+            @override
+            Widget build(BuildContext context) {
+              return Container(
+                decoration: const BoxDecoration(color: AppColors.bgNavy),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: const Alignment(-0.4, -0.6),
+                            radius: 1.0,
+                            colors: [
+                              AppColors.accentBlue.withAlpha(56),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: const Alignment(0.7, 0.8),
+                            radius: 1.1,
+                            colors: [
+                              const Color(0x591E3A5F),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    child,
+                  ],
+                ),
+              );
+            }
+          }
+
+          /// نص بتدرج فضي (اسم المكتبة والعناوين)
+          class SilverText extends StatelessWidget {
+            final String text;
+            final double size;
+            final FontWeight weight;
+            const SilverText(this.text,
+                {super.key, this.size = 20, this.weight = FontWeight.bold});
+
+            @override
+            Widget build(BuildContext context) {
+              return ShaderMask(
+                shaderCallback: (r) => AppColors.silverGradient.createShader(r),
+                child: Text(
+                  text,
+                  style: TextStyle(
+                      fontSize: size, fontWeight: weight, color: Colors.white),
+                ),
+              );
+            }
+          }
+
+          /// بانل زي .panel
+          class Panel extends StatelessWidget {
+            final Widget child;
+            final EdgeInsets padding;
+            final EdgeInsets margin;
+            const Panel({
+              super.key,
+              required this.child,
+              this.padding = const EdgeInsets.all(18),
+              this.margin = const EdgeInsets.only(bottom: 18),
+            });
+
+            @override
+            Widget build(BuildContext context) {
+              return Container(
+                margin: margin,
+                padding: padding,
+                decoration: BoxDecoration(
+                  color: AppColors.panelNavy,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.borderSilver),
+                ),
+                child: child,
+              );
+            }
+          }
+
+          class SectionTitle extends StatelessWidget {
+            final String text;
+            const SectionTitle(this.text, {super.key});
+
+            @override
+            Widget build(BuildContext context) => Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Text(text,
+                      style: const TextStyle(
+                          color: AppColors.textTitle,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600)),
+                );
+          }
+
+          /// الزر الفضي الرئيسي
+          class SilverButton extends StatelessWidget {
+            final String label;
+            final IconData? icon;
+            final VoidCallback? onPressed;
+            final bool loading;
+            const SilverButton({
+              super.key,
+              required this.label,
+              this.onPressed,
+              this.icon,
+              this.loading = false,
+            });
+
+            @override
+            Widget build(BuildContext context) {
+              final enabled = onPressed != null && !loading;
+              return Opacity(
+                opacity: enabled ? 1 : .55,
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: enabled ? AppColors.silverGradient : null,
+                    color: enabled ? null : const Color(0xFF2A3441),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: enabled ? onPressed : null,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (loading)
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: AppColors.panelNavy),
+                              )
+                            else if (icon != null)
+                              Icon(icon, size: 18, color: AppColors.panelNavy),
+                            if (loading || icon != null) const SizedBox(width: 8),
+                            Text(label,
+                                style: TextStyle(
+                                  color: enabled
+                                      ? AppColors.panelNavy
+                                      : const Color(0xFF66748A),
+                                  fontWeight: FontWeight.bold,
+                                )),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+
+          /// زر بحدود (إلغاء / ثانوي)
+          class OutlineBtn extends StatelessWidget {
+            final String label;
+            final IconData? icon;
+            final VoidCallback? onPressed;
+            final Color color;
+            final bool fullWidth;
+            const OutlineBtn({
+              super.key,
+              required this.label,
+              this.onPressed,
+              this.icon,
+              this.color = AppColors.textLabel,
+              this.fullWidth = true,
+            });
+
+            @override
+            Widget build(BuildContext context) {
+              final btn = OutlinedButton.icon(
+                onPressed: onPressed,
+                icon: icon == null ? const SizedBox.shrink() : Icon(icon, size: 16),
+                label: Text(label),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: color,
+                  side: BorderSide(
+                      color: color == AppColors.textLabel ? AppColors.borderSilver : color),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              );
+              return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
+            }
+          }
+
+          enum PillKind { pending, done, offer }
+
+          class Pill extends StatelessWidget {
+            final String text;
+            final PillKind kind;
+            const Pill(this.text, this.kind, {super.key});
+
+            Color get _c => switch (kind) {
+                  PillKind.pending => AppColors.warning,
+                  PillKind.done => AppColors.success,
+                  PillKind.offer => AppColors.offer,
+                };
+
+            factory Pill.status(bool done) => Pill(
+                  done ? 'مكتمل' : 'قيد الانتظار',
+                  done ? PillKind.done : PillKind.pending,
+                );
+
+            @override
+            Widget build(BuildContext context) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _c),
+                ),
+                child: Text(text, style: TextStyle(color: _c, fontSize: 11.5)),
+              );
+            }
+          }
+
+          /// أزرار صغيرة (تعديل / حذف / إتمام)
+          enum MiniKind { done, del, edit }
+
+          class MiniButton extends StatelessWidget {
+            final String label;
+            final MiniKind kind;
+            final VoidCallback onPressed;
+            const MiniButton(this.label, this.kind, this.onPressed, {super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final (bg, fg) = switch (kind) {
+                MiniKind.done => (AppColors.successBg, AppColors.success),
+                MiniKind.del => (AppColors.dangerBg, AppColors.danger),
+                MiniKind.edit => (AppColors.editBg, AppColors.priceBlue),
+              };
+              return Material(
+                color: bg,
+                borderRadius: BorderRadius.circular(6),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: onPressed,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    child: Text(label, style: TextStyle(color: fg, fontSize: 12.5)),
+                  ),
+                ),
+              );
+            }
+          }
+
+          /// كارت إحصائية
+          class StatTile extends StatelessWidget {
+            final String value;
+            final String label;
+            const StatTile(this.value, this.label, {super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.panelNavy,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.borderSilver),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FittedBox(
+                        fit: BoxFit.scaleDown, child: SilverText(value, size: 22)),
+                    const SizedBox(height: 4),
+                    Text(label,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.textMuted, fontSize: 11.5)),
+                  ],
+                ),
+              );
+            }
+          }
+
+          /// صورة مصغّرة للمنتج
+          class Thumb extends StatelessWidget {
+            final String? url;
+            final double size;
+            const Thumb(this.url, {super.key, this.size = 48});
+
+            @override
+            Widget build(BuildContext context) {
+              if (url == null || url!.isEmpty) {
+                return Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    color: AppColors.inputBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.menu_book, color: AppColors.textDim, size: 22),
+                );
+              }
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: CachedNetworkImage(
+                  imageUrl: url!,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => Container(
+                    width: size,
+                    height: size,
+                    color: AppColors.inputBg,
+                    child: const Icon(Icons.broken_image, color: AppColors.textDim),
+                  ),
+                ),
+              );
+            }
+          }
+
+          class EmptyText extends StatelessWidget {
+            final String text;
+            const EmptyText(this.text, {super.key});
+            @override
+            Widget build(BuildContext context) => Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Center(
+                      child: Text(text,
+                          style: const TextStyle(color: AppColors.textDim))),
+                );
+          }
+
+          /// نتيجة عملية: رسالة نجاح / خطأ صغيرة تحت الفورم
+          class StatusMsg extends StatelessWidget {
+            final String? text;
+            final bool error;
+            const StatusMsg(this.text, {super.key, this.error = false});
+
+            @override
+            Widget build(BuildContext context) {
+              if (text == null || text!.isEmpty) return const SizedBox.shrink();
+              final c = error ? AppColors.danger : AppColors.success;
+              return Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: c),
+                ),
+                child: Text(text!, style: TextStyle(color: c, fontSize: 13)),
+              );
+            }
+          }
+
+          /// حقل نصي بعنوان فوقه
+          class LabeledField extends StatelessWidget {
+            final String label;
+            final TextEditingController controller;
+            final TextInputType? keyboard;
+            final int maxLines;
+            final bool obscure;
+            final String? hint;
+            final ValueChanged<String>? onChanged;
+            final Widget? suffix;
+
+            const LabeledField({
+              super.key,
+              required this.label,
+              required this.controller,
+              this.keyboard,
+              this.maxLines = 1,
+              this.obscure = false,
+              this.hint,
+              this.onChanged,
+              this.suffix,
+            });
+
+            @override
+            Widget build(BuildContext context) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: const TextStyle(color: AppColors.textLabel, fontSize: 13.5)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: controller,
+                      keyboardType: keyboard,
+                      maxLines: obscure ? 1 : maxLines,
+                      minLines: maxLines > 1 ? 3 : 1,
+                      obscureText: obscure,
+                      onChanged: onChanged,
+                      decoration: InputDecoration(hintText: hint, suffixIcon: suffix),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+
+          // ============ Helpers ============
+          Future<bool> confirmDialog(BuildContext context, String message) async {
+            final res = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                content: Text(message,
+                    style: const TextStyle(color: AppColors.textMain, height: 1.6)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('إلغاء',
+                        style: TextStyle(color: AppColors.textLabel)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('تأكيد',
+                        style: TextStyle(color: AppColors.accentBlue)),
+                  ),
+                ],
+              ),
+            );
+            return res ?? false;
+          }
+
+          void toast(BuildContext context, String msg, {bool error = false}) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(
+                content: Text(msg,
+                    style: TextStyle(color: error ? AppColors.danger : AppColors.textMain)),
+              ));
+          }
+
+          Future<void> openLink(BuildContext context, String url) async {
+            final uri = Uri.tryParse(url);
+            if (uri == null || !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+              if (context.mounted) toast(context, 'تعذر فتح الرابط', error: true);
+            }
+          }
+          SALINY_EOF_MARKER_7f3a
+      - run: flutter create --org com.saliny --project-name saliny_admin .
+      - name: Restore pubspec after flutter create
+        run: |
+          grep -q supabase_flutter pubspec.yaml && echo "pubspec OK"
+      - name: Add Android permissions and minSdk
+        run: |
+          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/' android/app/build.gradle* || true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saliny-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
